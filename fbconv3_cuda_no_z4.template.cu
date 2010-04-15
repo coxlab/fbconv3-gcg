@@ -11,7 +11,13 @@ texture<float4, 1, cudaReadModeElementType> tex_float4;
 __constant__ float constant[$Z][$N_FILTER_ROWS][$FILTER_W][$N_OUTPUT4S][$NF];
 
 #define uint unsigned int
+
+#if $IMUL_FAST
 #define IMUL(a, b) __mul24(a, b)
+#else
+#define IMUL(a, b) a*b
+#end if
+
 
 extern "C" {
 
@@ -34,17 +40,17 @@ extern "C" {
 #end if
 
     // -- input/output "pointers"
-    const uint in_idx = \
-      blockIdx.y * $BLOCK_H * $INPUT_W + \
-      $nk * $INPUT_W * $N_FILTER_ROWS +	\
-      threadIdx.y * $INPUT_W + \
-      blockIdx.x * $BLOCK_W + threadIdx.x ;
-
-    const uint out_idx = \
-      blockIdx.y * $BLOCK_H * $OUTPUT_W + \
-      threadIdx.y * $OUTPUT_W + \
-      blockIdx.x * $BLOCK_W + threadIdx.x;
-
+    const uint in_idx =				   \
+      IMUL(IMUL(blockIdx.y, $BLOCK_H), $INPUT_W) + \
+      IMUL(IMUL($nk, $INPUT_W), $N_FILTER_ROWS) +  \
+      IMUL(threadIdx.y, $INPUT_W) +		   \
+      IMUL(blockIdx.x, $BLOCK_W) + threadIdx.x ;
+    
+    const uint out_idx =				\
+      IMUL(IMUL(blockIdx.y, $BLOCK_H), $OUTPUT_W) +	\
+      IMUL(threadIdx.y, $OUTPUT_W) +			\
+      IMUL(blockIdx.x, $BLOCK_W) + threadIdx.x ;
+    
     // -- XXX
     float4 input_v4;
 
@@ -54,12 +60,12 @@ extern "C" {
 #for nfr in xrange($N_FILTER_ROWS)
 #for i in xrange($N_LOAD_ITERATIONS)
 #if $i==($N_LOAD_ITERATIONS-1)
-    if((threadIdx.x+$BLOCK_W*$i)<$INPUT_BLOCK_W)
+    if( (threadIdx.x + IMUL($BLOCK_W, $i)) < $INPUT_BLOCK_W )
 #end if
       {
-	input_v4 = tex1Dfetch(tex_float4, in_idx + ($INPUT_W*$nfr) + ($BLOCK_W*$i));
+	input_v4 = tex1Dfetch(tex_float4, in_idx + IMUL($INPUT_W, $nfr) + IMUL($BLOCK_W, $i));
 #for d in xrange($NF)
-	shared_in[threadIdx.y][$nfr][$d][threadIdx.x+$BLOCK_W*$i] = input_v4.$xyzw[$d];
+	shared_in[threadIdx.y][$nfr][$d][threadIdx.x + IMUL($BLOCK_W, $i)] = input_v4.$xyzw[$d];
 #end for
       }
 #end for

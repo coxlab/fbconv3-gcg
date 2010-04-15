@@ -37,7 +37,10 @@ class InvalidParameter(Exception):
 class FilterOp(object):
 
     # -------------------------------------------------------------------------
-    def __init__(self, in_, fb_, out_, **kwargs):
+    def __init__(self, in_, fb_, out_,
+                 n_filter_rows = 2,
+                 imul_fast = True,
+                 ):
 
         self.in_ = in_
         self.fb_ = fb_
@@ -54,7 +57,7 @@ class FilterOp(object):
         assert out_d == fb_n
 
         # XXX: metaprog parameters (clean this up)
-        n_filter_rows = 2
+        
         n_output4s = len(garr_out_l)
 
         if fb_h % n_filter_rows != 0:
@@ -101,6 +104,9 @@ class FilterOp(object):
         n_kernels = fb_h / n_filter_rows
         topts['N_KERNELS'] = n_kernels
 
+        # XXX: TEMP
+        topts['IMUL_FAST'] = imul_fast
+
         # - generate source from template
         basename = path.join(MYPATH, path.splitext(__file__)[-2]+"_z%d" % (1 if in_d == 1 else 4))
         tmpl_basename = path.join(basename)
@@ -136,40 +142,7 @@ class FilterOp(object):
         # -- prepare function calls
         grid2 = grid[:2]
 
-        def cut_fb():
-            return [[[
-                np.ascontiguousarray(
-                    np.swapaxes(fb_[oz*4:(oz+1)*4,j,:,iz*4:(iz+1)*4], 0, 2)
-                    ).data
-                for j in xrange(fb_h)]
-                for iz in xrange(len(garr_in_l))]
-                for oz in xrange(len(garr_out_l))]
-        
-        fb_view_uint8 = fb_._ndarray.view('uint8')
-        self._fb_hash = sha1(fb_view_uint8).hexdigest()        
-        self._fb_sub_l = cut_fb()
-
-        def fb_sub_l_update():
-            fb_hash = sha1(fb_view_uint8).hexdigest()
-            # handle the case when the fb data has changed
-            if fb_hash != self._fb_hash:
-                self._fb_sub_l = cut_fb()
-                self._fb_hash = fb_hash
-            #else:
-            #    print "HASH HIT!"
-
-        #def fill_const(j, iz, oz):
-        #    fb_sub = self._fb_sub_l[oz][iz][j]
-        #    driver.memcpy_htod(const, fb_sub)
-
         def fill_const_nocache(j, iz, oz):
-            fb_sub = np.swapaxes(fb_[oz*4:(oz+1)*4,j,:,iz*4:(iz+1)*4], 0, 2)
-            fb_sub = np.ascontiguousarray(fb_sub)
-            # XXX: constant size check ?
-            driver.memcpy_htod(const, fb_sub.data)
-
-        def fill_const_nocache2(j, iz, oz):
-            #print fb_[oz*4*2:(oz+1)*4*2,j,:,iz*4:(iz+1)*4].shape
 
             fb_sub = fb_[oz*4*n_output4s : (oz+1)*4*n_output4s,
                          j*n_filter_rows : (j+1)*n_filter_rows,
@@ -200,7 +173,7 @@ class FilterOp(object):
                     print cudafunc.registers
 
                     # fill constant memory
-                    cudafunc_call_l += [(fill_const_nocache2, (j, iz, oz))]
+                    cudafunc_call_l += [(fill_const_nocache, (j, iz, oz))]
                         
                     # compute
                     cudafunc_call_l += [(cudafunc.prepared_call,

@@ -15,8 +15,8 @@ from scipy import linalg, signal
 from numpy import testing
 
 DEFAULT_NOVERIFY = False
-DEFAULT_NWARMUPS = 2
-DEFAULT_NRUNS = 10
+DEFAULT_N_WARMUPS = 2
+DEFAULT_N_RUNS = 10
 
 # tmp
 import warnings
@@ -38,11 +38,11 @@ def default(
     height = 16*FACTOR,
     width = 16*FACTOR,
     depth = 4,
-    nfilters = 8,
+    nfilters = 16,
     fsize = 8,
     # -- benchmark parameters
-    nwarmups = 2,
-    nruns = 10,
+    n_warmups = 2,
+    n_runs = 10,
     noverify = DEFAULT_NOVERIFY,
     ):
 
@@ -105,9 +105,9 @@ def default(
     fb_[:] = 0
     fop = mod.FilterOp(in_, fb_, out_)
 
-    for i in xrange(nwarmups + nruns):
+    for i in xrange(n_warmups + n_runs):
         print "=" * 80 
-        print "Trial %03d (%s)" % (i+1, 'run' if i >= nwarmups else 'warmup')
+        print "Trial %03d (%s)" % (i+1, 'run' if i >= n_warmups else 'warmup')
 
         # -- upload data
         start = time.time()
@@ -129,7 +129,7 @@ def default(
         end = time.time()
         t_download = end-start
 
-        if i >= nwarmups:
+        if i >= n_warmups:
             timings['upload'] += [t_upload]
             #timings['set_up'] += [t_set_up]
             timings['process'] += [t_process]
@@ -177,47 +177,21 @@ def default(
 # ------------------------------------------------------------------------------
 def main():
 
-    usage = "usage: %prog <method> [options]"
+    usage = "usage: %prog [options] <method> "
     
     parser = optparse.OptionParser(usage=usage)
     
-#     # -- 
-#     parser.add_option("--weight", 
-#                       type = "float",
-#                       dest = "weights",
-#                       action = "append",
-#                       default = DEFAULT_WEIGHTS,
-#                       help = "[default=%default]")
-
-#     # -- 
-#     parser.add_option("--regularization", "-C",
-#                       type="float",
-#                       default = DEFAULT_REGULARIZATION,
-#                       help="[default=%default]")
-
-#     parser.add_option("--no_trace_normalization", 
-#                       action="store_true", 
-#                       default=DEFAULT_NO_TRACE_NORMALIZATION,
-#                       help="[default=%default]")
-  
-#     # --
-#     parser.add_option("--output_filename", "-o",
-#                       type = "str",
-#                       metavar = "FILENAME",
-#                       default = DEFAULT_OUTPUT_FILENAME,
-#                       help = "output the results in FILENAME(.mat) if not None[default=%default]")
-
-    parser.add_option("--nwarmups",
+    parser.add_option("--n_warmups",
                       type = "int",
                       metavar = "INT",
-                      default=DEFAULT_NWARMUPS,
+                      default=DEFAULT_N_WARMUPS,
                       help="number of warmup runs before benchmark " 
                       "[default=%default]")
     
-    parser.add_option("--nruns",
+    parser.add_option("--n_runs",
                       type = "int",
                       metavar = "INT",
-                      default=DEFAULT_NRUNS,
+                      default=DEFAULT_N_RUNS,
                       help="number of runs (benchmark) " 
                       "[default=%default]")
     
@@ -237,7 +211,6 @@ def main():
 
         kwargs = eval(str(opts))
 
-        #default(nwarmups=0, nruns=1)
         default(method, **kwargs)
         
                        
