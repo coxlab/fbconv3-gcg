@@ -37,9 +37,15 @@ class InvalidParameter(Exception):
 class FilterOp(object):
 
     # -------------------------------------------------------------------------
-    def __init__(self, in_, fb_, out_,
-                 n_filter_rows = 2,
+    def __init__(self,
+                 in_, fb_, out_,
+                 # -- meta-programming parameters
+                 n_filter_rows = 1,
+                 n_output4s = 'all',
+                 spill = False,
                  imul_fast = True,
+                 pad_shared = True,                 
+                 use_tex1dfetch = True,
                  ):
 
         self.in_ = in_
@@ -57,14 +63,23 @@ class FilterOp(object):
         assert out_d == fb_n
 
         # XXX: metaprog parameters (clean this up)
-        
-        n_output4s = len(garr_out_l)
+
+        if n_filter_rows == 'all':
+            n_filter_rows = fb_h
+
+        if n_output4s == 'all':
+            n_output4s = len(garr_out_l)         
 
         if fb_h % n_filter_rows != 0:
             raise InvalidParameter("fb_h (%d) "
                                    "is not a multiple of n_filter_rows (%d)"
                                    % (fb_h, n_filter_rows))
-        
+
+        if len(garr_out_l) % n_output4s != 0:
+            raise InvalidParameter("len(garr_out_l) (%d) "
+                                   "is not a multiple of n_output4s (%d)"
+                                   % (len(garr_out_l), n_output4s))
+
         # padded shapes
         garr_in_h, garr_in_w, garr_in_d = in_._garr_l[0].shape
         garr_out_h, garr_out_w, garr_out_d = out_._garr_l[0].shape
@@ -84,6 +99,7 @@ class FilterOp(object):
         # input
         topts['INPUT_H'] = garr_in_h
         topts['INPUT_W'] = garr_in_w
+        topts['INPUT_D'] = garr_in_d
         # output
         topts['OUTPUT_H'] = garr_out_h
         topts['OUTPUT_W'] = garr_out_w
@@ -93,10 +109,13 @@ class FilterOp(object):
         topts['INPUT_BLOCK_W'] = (block_w+fb_w-1) if ((block_w+fb_w-1)<garr_in_w) else garr_in_w
         topts['N_LOAD_ITERATIONS'] = int(np.ceil((block_w+fb_w-1.)/block_w))
 
-        topts['PAD_SHARED_IN'] = True
+        topts['PAD_SHARED'] = pad_shared
+        topts['SPILL'] = spill
 
         # XXX: review
+        topts['USE_TEX1DFETCH'] = use_tex1dfetch
         topts['N_OUTPUT4S'] = n_output4s
+        topts['N_FILTERS'] = 4
 
         # XXX: tempppp
         assert fb_h % n_filter_rows == 0
@@ -108,7 +127,7 @@ class FilterOp(object):
         topts['IMUL_FAST'] = imul_fast
 
         # - generate source from template
-        basename = path.join(MYPATH, path.splitext(__file__)[-2]+"_z%d" % (1 if in_d == 1 else 4))
+        basename = path.join(MYPATH, path.splitext(__file__)[-2])
         tmpl_basename = path.join(basename)
         tmpl_fname = tmpl_basename + ".template.cu"
         tmpl = Template(file=tmpl_fname, searchList=[topts])
@@ -128,17 +147,17 @@ class FilterOp(object):
                       for nk in xrange(n_kernels)]
 
         # -- reference to texture memory
-        if fb_d == 1: 
-            tex = mod.get_texref("tex_float")
-            tex.set_format(driver.array_format.FLOAT, 1)
-        else:
-            tex = mod.get_texref("tex_float4")
-            tex.set_format(driver.array_format.FLOAT, 4)
+        if use_tex1dfetch:
+            if fb_d == 1: 
+                tex = mod.get_texref("tex_float")
+                tex.set_format(driver.array_format.FLOAT, 1)
+            else:
+                tex = mod.get_texref("tex_float4")
+                tex.set_format(driver.array_format.FLOAT, 4)
 
         # -- reference to constant memory
         const = mod.get_global("constant")[0]
 
-            
         # -- prepare function calls
         grid2 = grid[:2]
 
@@ -159,12 +178,13 @@ class FilterOp(object):
         # update fb_sub if necessary
         cudafunc_call_l = []
 
-        for oz, garr_out in enumerate(garr_out_l):
+        for o4z in xrange(len(garr_out_l)/n_output4s):
 
             for iz, garr_in in enumerate(garr_in_l):
 
                 # bind input texture
-                cudafunc_call_l += [(garr_in.bind_to_texref, (tex,))]
+                if use_tex1dfetch:
+                    cudafunc_call_l += [(garr_in.bind_to_texref, (tex,))]
 
                 for j in xrange(fb_h/n_filter_rows):
 
@@ -173,27 +193,24 @@ class FilterOp(object):
                     print cudafunc.registers
 
                     # fill constant memory
-                    cudafunc_call_l += [(fill_const_nocache, (j, iz, oz))]
-                        
+                    cudafunc_call_l += [(fill_const_nocache, (j, iz, o4z))]
+
                     # compute
                     cudafunc_call_l += [(cudafunc.prepared_call,
                                          [grid2, garr_in.gpudata] +
-                                         [garr_out_l[i].gpudata
+                                         [garr_out_l[o4z*n_output4s + i].gpudata
                                           for i in xrange(n_output4s)]
                                          )]
 
                 # -
             # -
-            print oz#, garr_out
-            break
             
         # -
         # - private XXX
         self._cudafunc_call_l = cudafunc_call_l
-        self._mod = mod
-        self._cudafunc_l = cudafunc_l
-        self._tex = tex
-        self._const = const
+#         self._mod = mod
+#         self._cudafunc_l = cudafunc_l
+#         self._const = const
 
     # -------------------------------------------------------------------------
     def __call__(self, **plugin_args):

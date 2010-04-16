@@ -38,13 +38,17 @@ def default(
     height = 16*FACTOR,
     width = 16*FACTOR,
     depth = 4,
-    nfilters = 16,
-    fsize = 8,
+    nfilters = 4,
+    fsize = 9,
     # -- benchmark parameters
     n_warmups = 2,
     n_runs = 10,
     noverify = DEFAULT_NOVERIFY,
     ):
+
+    assert height-fsize+1 > 0
+    assert width-fsize+1 > 0
+    assert nfilters % 4 == 0
 
     # -- Generate the data
     sp.random.seed(RSEED)
