@@ -5,10 +5,12 @@ from __future__ import division
 
 import optparse
 import cPickle as pkl
-import hashlib
 from os import path
+from glob import glob
 import time
 from pprint import pprint
+from hashlib import sha1
+import cPickle as pkl
 
 import scipy as sp
 from scipy import linalg, signal
@@ -16,7 +18,8 @@ from numpy import testing
 
 DEFAULT_NOVERIFY = False
 DEFAULT_N_WARMUPS = 2
-DEFAULT_N_RUNS = 10
+DEFAULT_N_RUNS = 5
+DEFAULT_METAPARAMS = {}
 
 # tmp
 import warnings
@@ -27,45 +30,51 @@ warnings.simplefilter('ignore', DeprecationWarning)
 # that points to a file with the parameters to explore
 # bruteforce at first and then possibly with ES in the future
 
-FACTOR = 128
+FACTOR = 16
 FILTER_TYPE = 'correlate'
 RSEED = 123
-    
-def benchmark(
-    method,
+
+from fbconv3_utils import InvalidConfig, MYPATH
+
+import fbconv3_cuda as mod
+
+def benchmark_run(
+    #method,
     # -- input parameters
     nimgs = 1,
     height = 16*FACTOR,
     width = 16*FACTOR,
     depth = 4,
-    nfilters = 4,
-    fsize = 8,
+    n_filters = 4,
+    fsize = 9,
+    # -- metaprog parameters
+    metaparams = DEFAULT_METAPARAMS,
     # -- benchmark parameters
-    n_warmups = 2,
-    n_runs = 10,
+    n_warmups = DEFAULT_N_WARMUPS,
+    n_runs = DEFAULT_N_RUNS,
     noverify = DEFAULT_NOVERIFY,
     ):
 
     assert height-fsize+1 > 0
     assert width-fsize+1 > 0
-    assert nfilters % 4 == 0
+    assert n_filters % 4 == 0
 
     # -- Generate the data
     sp.random.seed(RSEED)
     in_data = sp.random.randn(height, width, depth).astype('float32')
-    fb_data = sp.random.randn(nfilters, fsize, fsize, depth).astype('float32')
-    out_data = sp.empty((height-fsize+1, width-fsize+1, nfilters), dtype='float32')
+    fb_data = sp.random.randn(n_filters, fsize, fsize, depth).astype('float32')
+    out_data = sp.empty((height-fsize+1, width-fsize+1, n_filters), dtype='float32')
         
     gflop = out_data.size * (fsize * fsize * depth * 2) / (1000.**3.)
 
     if not noverify:
         hashme = pkl.dumps([in_data, fb_data, FILTER_TYPE],
                            protocol=pkl.HIGHEST_PROTOCOL)
-        data_hash = hashlib.sha1(hashme).hexdigest()
+        data_hash = sha1(hashme).hexdigest()
         fname = path.join("out_gt", data_hash)
         if not path.exists(fname):
             print "Computing and caching ground truth (CPU/numpy) ..."
-            for n in xrange(nfilters):
+            for n in xrange(n_filters):
                 if FILTER_TYPE == 'correlate':
                     out_data[:,:,n] = signal.correlate(in_data,
                                                        fb_data[n],
@@ -84,7 +93,6 @@ def benchmark(
             print "Loading ground truth (CPU/numpy) ..."            
             out_gt = pkl.load(open(fname))
 
-    outputs = []
     all_timings = {}
 
     timings = dict([(key, [])
@@ -97,17 +105,13 @@ def benchmark(
                     ]
                    )
 
-    outputs = []
-
-    mod = __import__("fbconv3_" + method)
-
     in_ = mod.Input(height, width, depth)
-    fb_ = mod.Filterbank(nfilters, fsize, fsize, depth)
-    out_ = mod.Output(height-fsize+1, width-fsize+1, nfilters)
+    fb_ = mod.Filterbank(n_filters, fsize, fsize, depth)
+    out_ = mod.Output(height-fsize+1, width-fsize+1, n_filters)        
 
     # -- set-up operation (e.g. compilation)
     fb_[:] = 0
-    fop = mod.FilterOp(in_, fb_, out_)
+    fop = mod.FilterOp(in_, fb_, out_, **metaparams)
 
     for i in xrange(n_warmups + n_runs):
         print "=" * 80 
@@ -135,7 +139,6 @@ def benchmark(
 
         if i >= n_warmups:
             timings['upload'] += [t_upload]
-            #timings['set_up'] += [t_set_up]
             timings['process'] += [t_process]
             timings['cuda'] += [t_cuda]
             timings['download'] += [t_download]
@@ -152,15 +155,13 @@ def benchmark(
     if not noverify:
         print "Verify last output..."
         diffmax = max(sp.absolute(out_data-out_gt).ravel())
-        #print out_data
-        #print out_gt
         testing.assert_array_almost_equal(out_data, out_gt, 1e-3)
 
-    timings_stats = dict([(key, {'median':sp.median(t),
-                                 'mean':sp.mean(t),
-                                 'std':sp.std(t),
-                                 'max':max(t),
-                                 'min':min(t),                                     
+    timings_stats = dict([(key, {'median': sp.median(t),
+                                 'mean': sp.mean(t),
+                                 'std': sp.std(t),
+                                 'max': max(t),
+                                 'min': min(t),                                     
                                  }
                            )
                           for key, t in timings.iteritems()
@@ -169,20 +170,104 @@ def benchmark(
 
     gflops_cuda = {
         'median': gflop / timings_stats['cuda']['median'],
-        'mean': gflop / timings_stats['process']['mean'],
-        'max': gflop / timings_stats['process']['min'],
-        'min': gflop / timings_stats['process']['max'],
+        'mean': gflop / timings_stats['cuda']['mean'],
+        'max': gflop / timings_stats['cuda']['min'],
+        'min': gflop / timings_stats['cuda']['max'],
         }
 
     pprint(timings_stats)
     pprint(gflops_cuda)
 
+    return timings_stats, gflop
+    
+    
+def benchmark(
+    #method,
+    inputs_fname,
+    metaparams_fname,
+    # -- benchmark parameters
+    n_warmups = DEFAULT_N_WARMUPS,
+    n_runs = DEFAULT_N_RUNS,
+    noverify = DEFAULT_NOVERIFY,
+    ):
+
+    in_dict = {}
+    execfile(inputs_fname, {}, in_dict)
+    inputs_list = in_dict['inputs_list']
+
+    mp_dict = {}
+    execfile(metaparams_fname, {}, mp_dict)
+    metaparams_list = mp_dict['metaparams_list']
+
+    print "=" * 80
+    print len(inputs_list), "benchs to run ..."
+    print len(metaparams_list), "metaparams to evaluate ..."
+    print "=" * 80
+
+    sp.random.seed(RSEED)
+    sp.random.shuffle(inputs_list)
+    sp.random.shuffle(metaparams_list)
+
+    n_tot = len(inputs_list) * len(metaparams_list)
+    it = 0
+
+    for ii, inputs in enumerate(inputs_list):
+        pprint(inputs)
+        
+        kwargs = inputs
+
+        out_fname = mod.device_name + "__"
+        out_fname += sha1(open('fbconv3_cuda.py').read()).hexdigest() + "__"
+        out_fname += sha1(open('fbconv3_cuda.template.cu').read()).hexdigest() + "__"        
+        out_fname += "__".join(["%s=%s" % (key, value) for key, value in inputs.iteritems()])
+        out_fname = path.join("bench_data", out_fname + '.pkl')
+
+        results = []
+        for im, metaparams in enumerate(metaparams_list):
+            
+            kwargs.update({'metaparams': metaparams,
+                           'n_warmups': n_warmups,
+                           'n_runs': n_runs,
+                           'noverify': noverify})
+
+            try:
+                timings_stats, gflop = benchmark_run(**inputs)
+                results += [{'timings_stats': timings_stats,'gflop': gflop}]
+            except InvalidConfig, err:
+                print err
+                pass
+
+            it += 1
+
+            print "*" * 80
+            print "*" * 80
+            pprint(kwargs)
+            print "." * 80
+            print "Inputs: %02.3f %%" % (100.*(ii+1)/len(inputs_list))
+            print "Metaparams: %02.3f %%" % (100.*(im+1)/len(metaparams_list))
+            print "." * 80
+            print "Total: %02.3f %%" % (100.*(it+1)/n_tot)
+            print "*" * 80
+            print "*" * 80
+
+        print "Writing", out_fname
+        pkl.dump(results, open(out_fname, 'w+'), protocol=pkl.HIGHEST_PROTOCOL)
+
 # ------------------------------------------------------------------------------
 def main():
 
-    usage = "Usage: %prog [options] <method> "
-    usage += "\nExample: python %prog cuda"
+    usage = "Usage: %prog [options] <inputs_fname> [<metaparams_fname>] "
+
+#     detected_methods = [path.splitext(fname)[-2].split('fbconv3_')[-1]
+#                         for fname in glob('fbconv3_*.py')
+#                         ]
     
+#     usage = "Usage: %prog [options] <method> <inputs_fname> [<metaparams_fname>] "
+#     usage += "\nDetected methods: "
+#     usage += ", ".join(detected_methods)
+#     usage += "\nExample: python %prog " + detected_methods[0]
+#     usage += " fbconv3_inputs.py fbconv3_%s_metaparams.py" % detected_methods[0]
+
     parser = optparse.OptionParser(usage=usage)
     
     parser.add_option("--n_warmups",
@@ -207,13 +292,18 @@ def main():
 
     opts, args = parser.parse_args()
 
-    if len(args) != 1:
+    if len(args) != 2 :
         parser.print_help()
     else:
-        method = args[0]
+        #method = args[0]
+        inputs_fname = args[0]
+        metaparams_fname = args[1]
+        
         kwargs = eval(str(opts))
 
-        benchmark(method, **kwargs)
+        benchmark(inputs_fname,
+                  metaparams_fname,
+                  **kwargs)
                        
 # ------------------------------------------------------------------------------
 if __name__ == "__main__":

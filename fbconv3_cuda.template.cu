@@ -8,7 +8,7 @@
 #if $IMUL_FAST
 #define IMUL(a, b) __mul24(a, b)
 #else
-#define IMUL(a, b) a*b
+#define IMUL(a, b) a * b
 #end if
 
 #set xyzw = ['x','y','z','w']
@@ -90,6 +90,7 @@ extern "C" {
       }
 #end for
 #end for
+
     __syncthreads();
 
     // -------------------------------------------------------------------------
@@ -120,7 +121,6 @@ extern "C" {
     // -------------------------------------------------------------------------
     // -- Output results
     // -------------------------------------------------------------------------
-
 #for o in xrange($N_OUTPUT4S)
 #for n in xrange($N_FILTERS)
 #if $SPILL

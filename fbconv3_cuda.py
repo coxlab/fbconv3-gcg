@@ -1,68 +1,94 @@
-""" XXX: doc """
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
 
 import numpy as np
 import ctypes
 from copy import copy, deepcopy
 from hashlib import sha1
 
-import pycuda.autoinit
-from pycuda import gpuarray
-from pycuda import driver
-from pycuda import compiler
-
-PADFACTOR_H = 16
-PADFACTOR_W = 16
+# Initialize CUDA
+from pycuda import driver, gpuarray, compiler, tools
+from pycuda.driver import device_attribute
+driver.init()
+context = tools.make_default_context()
+device = context.get_device()
+import atexit
+atexit.register(context.pop)
+def get_device_attribute(name):
+    return device.get_attribute(device_attribute.__dict__[name])
+device_name = device.name().replace(' ', '_')
 
 #import os
 from os import path
 
 from pythor2.utils import mkdir_p
 
-import pycuda.autoinit
+#import pycuda.autoinit
 from pycuda import gpuarray
 from pycuda import driver
 from Cheetah.Template import Template
 
+from fbconv3_utils import InvalidConfig, MYPATH
+
 # -----------------------------------------------------------------------------
-# XXX: tmp?
-THREADS = 8,8,1
-KEEP = False
-DEBUG = False
+PADFACTOR_H = 16
+PADFACTOR_W = 16
 
-MYPATH = path.dirname(path.realpath(__file__))
-
-class InvalidParameter(Exception):
-    pass
-
+# =============================================================================
 class FilterOp(object):
 
     # -------------------------------------------------------------------------
     def __init__(self,
                  in_, fb_, out_,
                  # -- meta-programming parameters
-                 n_filter_rows = 1,
-                 n_output4s = 'all',
-                 spill = False,
-                 imul_fast = True,
-                 pad_shared = True,                 
-                 use_tex1dfetch = True,
+                 block_w = 8,
+                 block_h = 8,
+                 n_filter_rows = 1, # 1, 2, 4, 8, 16
+                 n_output4s = 'all', # 'all', 1, 2, 4, 8, 16
+                 spill = False, # False, True
+                 imul_fast = True, # True, False
+                 pad_shared = True, # True, False
+                 use_tex1dfetch = True, # True, False
+                 maxrregcount = None, # None, 8, 16, 32
+                 # --
+                 use_fast_math = False,
                  ):
 
-        self.in_ = in_
-        self.fb_ = fb_
-        self.out_ = out_
+        # block of threads
+        block = block_w, block_h, 1
 
+        max_block_w = get_device_attribute("MAX_BLOCK_DIM_X")
+        if block_w > max_block_w:
+            raise InvalidConfig("block_w (%d) is too large (max_block_w=%d)."
+                                % (block_w, max_block_w))
+
+        max_block_h = get_device_attribute("MAX_BLOCK_DIM_Y")
+        if block_h > max_block_h:
+            raise InvalidConfig("block_h (%d) is too large (max_block_h=%d)."
+                                % (block_h, max_block_h))
+
+        max_threads = get_device_attribute("MAX_THREADS_PER_BLOCK")
+        if block_w * block_h > max_threads:
+            raise InvalidConfig("Too many threads! "
+                                "The current device supports %d threads, "
+                                "but you asked %d (block_w=%d * block_h=%d)."
+                                % (max_threads,
+                                   block_w * block_h,block_w, block_h))
+        
+        # XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
         garr_out_l = out_._garr_l
         garr_in_l = in_._garr_l        
 
         # original shapes
         in_h, in_w, in_d = in_.height, in_.width, in_.depth
-        fb_n, fb_h, fb_w, fb_d = fb_.nfilters, fb_.height, fb_.width, fb_.depth
+        fb_n, fb_h, fb_w, fb_d = fb_.n_filters, fb_.height, fb_.width, fb_.depth
         out_h, out_w, out_d = out_.height, out_.width, out_.depth
 
         assert out_d == fb_n
 
-        # XXX: metaprog parameters (clean this up)
+        # padded shapes
+        garr_in_h, garr_in_w, garr_in_d = in_._garr_l[0].shape
+        garr_out_h, garr_out_w, garr_out_d = out_._garr_l[0].shape
 
         if n_filter_rows == 'all':
             n_filter_rows = fb_h
@@ -71,23 +97,32 @@ class FilterOp(object):
             n_output4s = len(garr_out_l)         
 
         if fb_h % n_filter_rows != 0:
-            raise InvalidParameter("fb_h (%d) "
-                                   "is not a multiple of n_filter_rows (%d)"
-                                   % (fb_h, n_filter_rows))
+            raise InvalidConfig("fb_h (%d) "
+                                "is not a multiple of n_filter_rows (%d)"
+                                % (fb_h, n_filter_rows))
 
         if len(garr_out_l) % n_output4s != 0:
-            raise InvalidParameter("len(garr_out_l) (%d) "
-                                   "is not a multiple of n_output4s (%d)"
-                                   % (len(garr_out_l), n_output4s))
+            raise InvalidConfig("len(garr_out_l) (%d) "
+                                "is not a multiple of n_output4s (%d)"
+                                % (len(garr_out_l), n_output4s))
 
-        # padded shapes
-        garr_in_h, garr_in_w, garr_in_d = in_._garr_l[0].shape
-        garr_out_h, garr_out_w, garr_out_d = out_._garr_l[0].shape
+        #self.in_ = in_
+        #self.fb_ = fb_
+        #self.out_ = out_
 
-        block_w,block_h,block_d = threads = THREADS
+        # grid of blocks
         grid = (int(np.ceil(1.*garr_out_w/block_w)),(int(np.ceil(1.*garr_out_h/block_h))), 1)
-        self._threads = threads
-        self._grid = grid
+        grid_w, grid_h = grid[:2]
+
+        max_grid_w = get_device_attribute("MAX_GRID_DIM_X")
+        if grid_w > max_grid_w:
+            raise InvalidConfig("grid_w (%d) is too large (max_grid_w=%d)."
+                                % (grid_w, max_grid_w))
+
+        max_grid_h = get_device_attribute("MAX_GRID_DIM_Y")
+        if grid_h > max_grid_h:
+            raise InvalidConfig("grid_h (%d) is too large (max_grid_h=%d)."
+                                % (grid_h, max_grid_h))
 
         # -- generate gpu code
 
@@ -135,15 +170,23 @@ class FilterOp(object):
 
         # - compile source
         opt_l = []
-        opt_l += ["--opencc-options=-v,-OPT:0limit=0,-O3,-LIST:source=on"]
-        opt_l += ["--ptxas-options=-v"]
-        cubin_str = compiler.compile(outstr, options=opt_l)
+        #opt_l += ["--opencc-options=-v,-OPT:0limit=0,-O3,-LIST:source=on"]
+        #opt_l += ["--ptxas-options=-v"]
+        if maxrregcount is not None:
+            opt_l += ["--maxrregcount=%d" % maxrregcount]
+        if use_fast_math:
+            opt_l += ["--use_fast_math"]
+
+        try:
+            cubin_str = compiler.compile(outstr, options=opt_l)
+        except driver.CompileError, err:
+            raise InvalidConfig(err.msg)
 
         # - XXX
         mod = driver.module_from_buffer(cubin_str)
 
         cudafunc_l = [mod.get_function('cudafilter_kernel_%d' % nk)
-                      .prepare("P"*(n_output4s+1), block=threads)
+                      .prepare("P"*(n_output4s+1), block=block)
                       for nk in xrange(n_kernels)]
 
         # -- reference to texture memory
@@ -167,35 +210,54 @@ class FilterOp(object):
                          j*n_filter_rows : (j+1)*n_filter_rows,
                          :,
                          iz*4 : (iz+1)*4]
-            
+
             fb_sub = np.swapaxes(fb_sub, 0, 3)
 
             fb_sub = np.ascontiguousarray(fb_sub)
-            
-            # XXX: constant size check ?
+
+            max_const = get_device_attribute('TOTAL_CONSTANT_MEMORY')
+            if fb_sub.nbytes > max_const:
+                raise InvalidConfig("fb_sub.nbytes (%d) is too large (max_const=%d)."
+                                    % (fb_sub.nbytes, max_const))                
+
             driver.memcpy_htod(const, fb_sub.data)
 
         # update fb_sub if necessary
         cudafunc_call_l = []
 
+        max_regs = get_device_attribute('MAX_REGISTERS_PER_BLOCK')
+        max_smem = get_device_attribute('MAX_SHARED_MEMORY_PER_BLOCK')
+        
         for o4z in xrange(len(garr_out_l)/n_output4s):
 
             for iz, garr_in in enumerate(garr_in_l):
-
-                # bind input texture
+                
                 if use_tex1dfetch:
+                    # add call: bind input texture
                     cudafunc_call_l += [(garr_in.bind_to_texref, (tex,))]
 
                 for j in xrange(fb_h/n_filter_rows):
 
                     # get cuda kernel function
                     cudafunc = cudafunc_l[j]
-                    print cudafunc.registers
 
-                    # fill constant memory
+                    # make sure that the function can be run on the device
+                    if cudafunc.num_regs > max_regs:
+                        raise InvalidConfig(
+                            "cudafunc.num_regs (%d) "
+                            "is too large (max_regs=%d)."
+                            % (fb_sub.cudafunc.num_regs, max_regs))
+
+                    if cudafunc.shared_size_bytes > max_smem:
+                        raise InvalidConfig(
+                            "cudafunc.cudafunc.shared_size_bytes (%d) "
+                            "is too large (max_regs=%d)."
+                            % (fb_sub.cudafunc.num_regs, max_regs))                        
+                    
+                    # add call: fill constant memory
                     cudafunc_call_l += [(fill_const_nocache, (j, iz, o4z))]
 
-                    # compute
+                    # add call: compute 
                     cudafunc_call_l += [(cudafunc.prepared_call,
                                          [grid2, garr_in.gpudata] +
                                          [garr_out_l[o4z*n_output4s + i].gpudata
@@ -204,25 +266,29 @@ class FilterOp(object):
 
                 # -
             # -
-            
         # -
-        # - private XXX
+        
         self._cudafunc_call_l = cudafunc_call_l
-#         self._mod = mod
-#         self._cudafunc_l = cudafunc_l
-#         self._const = const
 
     # -------------------------------------------------------------------------
     def __call__(self, **plugin_args):
+        
         start = driver.Event()
         end = driver.Event()
+        
         start.record()
-        [func(*args) for func, args in self._cudafunc_call_l]         
+        try:
+            [func(*args) for func, args in self._cudafunc_call_l]
+        except driver.LaunchError, err:
+            raise InvalidConfig(err)
         end.record()
+        
         end.synchronize()
+        
         return end.time_since(start)*1e-3
 
 
+# =============================================================================
 class Input(object):
 
     # -------------------------------------------------------------------------
@@ -247,13 +313,16 @@ class Input(object):
         self._padded_shape = padh, padw, padd
 
         # gpuarray alloc
-        if depth == 1:
-            self._garr_l = [gpuarray.GPUArray((padh,padw,1),'float32')]
-            ngarrs = 1
-        else:
-            ngarrs = int(np.ceil(depth / 4.))
-            self._garr_l = [gpuarray.GPUArray((padh,padw,4),'float32') for _ in xrange(ngarrs)]
-        
+        try:
+            if depth == 1:
+                self._garr_l = [gpuarray.GPUArray((padh,padw,1),'float32')]
+                ngarrs = 1
+            else:
+                ngarrs = int(np.ceil(depth / 4.))
+                self._garr_l = [gpuarray.GPUArray((padh,padw,4),'float32') for _ in xrange(ngarrs)]
+        except driver.MemoryError, err:
+            raise InvalidConfig(err)
+
         self._garr_tmp = driver.pagelocked_empty(self._garr_l[0].shape, self.dtype)
         self._arr_tmp = np.empty((ngarrs,)+self._padded_shape[:2]+(self._garr_l[0].shape[-1],), dtype='float32')
 
@@ -261,7 +330,7 @@ class Input(object):
     def __getitem__(self, index):
 
         g_l = self._garr_l
-        
+
         my_h, my_w, my_d = self.height, self.width, self.depth
         data = self._garr_tmp
 
@@ -269,7 +338,7 @@ class Input(object):
         if my_d == 1 or my_d == 4:
             g_l[0].get(data)
             return data[:my_h,:my_w,:my_d][index].copy()
-        
+
         # -- 
         ngarrs = len(g_l)
 
@@ -287,11 +356,11 @@ class Input(object):
             return out.copy()
         else:
             return out[index].copy()
-        
+
     # -------------------------------------------------------------------------
     def setitem_opt_tmp(self, value): # pragma: no cover
         g_l = self._garr_l
-        
+
         for i in xrange(len(g_l)):
             g_l[i].set(value[:,:,i*4:(i+1)*4])
 
@@ -304,13 +373,13 @@ class Input(object):
                and np.array(value).size == 1:
             for i in xrange(len(g_l)):
                 g_l[i].fill(float(value))
-                
+
         # -- full update
         elif index == slice(None,None,None) \
                  and value.shape == self._padded_shape:
             for i in xrange(len(g_l)):
                 g_l[i].set(np.ascontiguousarray(value[:,:,i*4:(i+1)*4]))
-                
+
         # -- standard update
         else:
             if index != slice(None,None,None):                
@@ -324,27 +393,29 @@ class Input(object):
                 tmp[:h,:w,:4] = harr[:,:,i*4:(i+1)*4]
                 g_l[i].set(tmp)
 
+# =============================================================================
 Output = Input
 
+# =============================================================================
 class Filterbank(object):
 
     # -------------------------------------------------------------------------
-    def __init__(self, nfilters, height, width, depth, dtype='float32'):
+    def __init__(self, n_filters, height, width, depth, dtype='float32'):
 
         # constraints
-        assert nfilters == 1 or nfilters % 4 == 0
+        assert n_filters == 1 or n_filters % 4 == 0
         assert height == width
         assert depth == 1 or depth % 4 == 0
 
         assert dtype == 'float32' # for now
 
-        self.nfilters = nfilters
+        self.n_filters = n_filters
         self.height = height
         self.width = width
         self.depth = depth
         self.dtype = dtype
-        
-        self._ndarray = np.ndarray((nfilters,height,width,depth), dtype=dtype)
+
+        self._ndarray = np.ndarray((n_filters,height,width,depth), dtype=dtype)
 
     # -------------------------------------------------------------------------
     def __getitem__(self, key):
@@ -361,20 +432,4 @@ class Filterbank(object):
         else:
             self._ndarray[key] = value.astype(self.dtype)
 
-
-# # ------------------------------------------------------------------------------
-# import hashlib
-# def get_lib_fname(base, topts, copts):
-#     strval = repr(topts)+repr(copts)
-#     hashval = hashlib.sha1(strval).hexdigest()
-#     return "%s__%s" % (base,hashval)
-
-# # ------------------------------------------------------------------------------
-# import subprocess
-# def execute(cmd): # pragma: no cover
-#     p = subprocess.Popen(cmd,stdout=subprocess.PIPE,stderr=subprocess.PIPE,shell=True)
-#     out,err = p.communicate()
-#     if p.returncode:
-#         raise Exception, err
-#     return out, err
 
