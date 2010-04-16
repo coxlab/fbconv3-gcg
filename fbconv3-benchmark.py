@@ -27,11 +27,11 @@ warnings.simplefilter('ignore', DeprecationWarning)
 # that points to a file with the parameters to explore
 # bruteforce at first and then possibly with ES in the future
 
-FACTOR = 16
+FACTOR = 128
 FILTER_TYPE = 'correlate'
 RSEED = 123
     
-def default(
+def benchmark(
     method,
     # -- input parameters
     nimgs = 1,
@@ -39,7 +39,7 @@ def default(
     width = 16*FACTOR,
     depth = 4,
     nfilters = 4,
-    fsize = 9,
+    fsize = 8,
     # -- benchmark parameters
     n_warmups = 2,
     n_runs = 10,
@@ -167,21 +167,21 @@ def default(
                           ]
                          )
 
-    pprint(timings_stats)
-    gflops_median = gflop / timings_stats['process']['median']
-    gflops_mean = gflop / timings_stats['process']['mean']
-    gflops_max = gflop / timings_stats['process']['min']
-    gflops_min = gflop / timings_stats['process']['max']
+    gflops_cuda = {
+        'median': gflop / timings_stats['cuda']['median'],
+        'mean': gflop / timings_stats['process']['mean'],
+        'max': gflop / timings_stats['process']['min'],
+        'min': gflop / timings_stats['process']['max'],
+        }
 
-    print "gflops_median", gflops_median
-    print "gflops_mean", gflops_mean
-    print "gflops_max", gflops_max
-    print "gflops_min", gflops_min
+    pprint(timings_stats)
+    pprint(gflops_cuda)
 
 # ------------------------------------------------------------------------------
 def main():
 
-    usage = "usage: %prog [options] <method> "
+    usage = "Usage: %prog [options] <method> "
+    usage += "\nExample: python %prog cuda"
     
     parser = optparse.OptionParser(usage=usage)
     
@@ -210,13 +210,10 @@ def main():
     if len(args) != 1:
         parser.print_help()
     else:
-
         method = args[0]
-
         kwargs = eval(str(opts))
 
-        default(method, **kwargs)
-        
+        benchmark(method, **kwargs)
                        
 # ------------------------------------------------------------------------------
 if __name__ == "__main__":
