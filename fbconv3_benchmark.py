@@ -18,7 +18,7 @@ from numpy import testing
 
 DEFAULT_NOVERIFY = False
 DEFAULT_N_WARMUPS = 2
-DEFAULT_N_RUNS = 5
+DEFAULT_N_RUNS = 10
 DEFAULT_METAPARAMS = {}
 
 # tmp
@@ -178,35 +178,40 @@ def benchmark_run(
     pprint(timings_stats)
     pprint(gflops_cuda)
 
-    return timings_stats, gflop
+    return timings, gflop
     
     
 def benchmark(
-    #method,
+    output_path,
     inputs_fname,
-    metaparams_fname,
+    metaparams_fname = None,
     # -- benchmark parameters
     n_warmups = DEFAULT_N_WARMUPS,
     n_runs = DEFAULT_N_RUNS,
     noverify = DEFAULT_NOVERIFY,
     ):
 
+    assert path.exists(output_path) and path.isdir(output_path)
+
     in_dict = {}
     execfile(inputs_fname, {}, in_dict)
     inputs_list = in_dict['inputs_list']
 
-    mp_dict = {}
-    execfile(metaparams_fname, {}, mp_dict)
-    metaparams_list = mp_dict['metaparams_list']
+    if metaparams_fname is not None:
+        mp_dict = {}
+        execfile(metaparams_fname, {}, mp_dict)
+        metaparams_list = mp_dict['metaparams_list']
+    else:
+        metaparams_list = [{}]
 
     print "=" * 80
     print len(inputs_list), "benchs to run ..."
     print len(metaparams_list), "metaparams to evaluate ..."
     print "=" * 80
 
-    sp.random.seed(RSEED)
-    sp.random.shuffle(inputs_list)
-    sp.random.shuffle(metaparams_list)
+    #sp.random.seed(RSEED)
+    #sp.random.shuffle(inputs_list)
+    #sp.random.shuffle(metaparams_list)
 
     n_tot = len(inputs_list) * len(metaparams_list)
     it = 0
@@ -220,7 +225,10 @@ def benchmark(
         out_fname += sha1(open('fbconv3_cuda.py').read()).hexdigest() + "__"
         out_fname += sha1(open('fbconv3_cuda.template.cu').read()).hexdigest() + "__"        
         out_fname += "__".join(["%s=%s" % (key, value) for key, value in inputs.iteritems()])
-        out_fname = path.join("bench_data", out_fname + '.pkl')
+        out_fname = path.join(output_path, out_fname + '.pkl')
+
+        if path.exists(out_fname):
+            continue
 
         results = []
         for im, metaparams in enumerate(metaparams_list):
@@ -231,13 +239,15 @@ def benchmark(
                            'noverify': noverify})
 
             try:
-                timings_stats, gflop = benchmark_run(**inputs)
-                results += [{'timings_stats': timings_stats,'gflop': gflop}]
+                timings, gflop = benchmark_run(**inputs)
+                results += [{
+                    'metaparams': metaparams,
+                    'timings': timings,
+                    'gflop': gflop,
+                    }]
             except InvalidConfig, err:
                 print err
                 pass
-
-            it += 1
 
             print "*" * 80
             print "*" * 80
@@ -250,13 +260,15 @@ def benchmark(
             print "*" * 80
             print "*" * 80
 
+            it += 1
+
         print "Writing", out_fname
         pkl.dump(results, open(out_fname, 'w+'), protocol=pkl.HIGHEST_PROTOCOL)
 
 # ------------------------------------------------------------------------------
 def main():
 
-    usage = "Usage: %prog [options] <inputs_fname> [<metaparams_fname>] "
+    usage = "Usage: %prog [options] <ouput_path> <inputs_fname> [<metaparams_fname>] "
 
 #     detected_methods = [path.splitext(fname)[-2].split('fbconv3_')[-1]
 #                         for fname in glob('fbconv3_*.py')
@@ -292,18 +304,23 @@ def main():
 
     opts, args = parser.parse_args()
 
-    if len(args) != 2 :
+    if not 2 <= len(args) <= 3 :
         parser.print_help()
     else:
-        #method = args[0]
-        inputs_fname = args[0]
-        metaparams_fname = args[1]
-        
+        output_path = args[0]
+        inputs_fname = args[1]
+        if len(args) == 3:
+            metaparams_fname = args[2]
+        else:
+            metaparams_fname = None
+            
         kwargs = eval(str(opts))
 
-        benchmark(inputs_fname,
-                  metaparams_fname,
-                  **kwargs)
+        benchmark(
+            output_path,
+            inputs_fname,
+            metaparams_fname,
+            **kwargs)
                        
 # ------------------------------------------------------------------------------
 if __name__ == "__main__":
