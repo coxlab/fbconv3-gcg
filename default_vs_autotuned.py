@@ -29,10 +29,14 @@ def default_vs_autotuned(fname):
     fin = open(fname)
     all_timings = pkl.load(fin)
 
+    print fname
+
     # -- 
     gflop = all_timings[0]['gflop']
     tot_runs = len(all_timings[0]['timings']['cuda'])
     half_runs = int(tot_runs / 2)
+    metaparams_names = default_metaparams.keys()
+    constant_metaparams = [all_timings]
 
     # -- performance of the default configuration
     default_timings_l = [item for item in all_timings
