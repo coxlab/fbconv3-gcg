@@ -154,7 +154,7 @@ def benchmark_run(
 
     if not noverify:
         print "Verify last output..."
-        diffmax = max(sp.absolute(out_data-out_gt).ravel())
+        #diffmax = max(sp.absolute(out_data-out_gt).ravel())
         testing.assert_array_almost_equal(out_data, out_gt, 1e-3)
 
     timings_stats = dict([(key, {'median': sp.median(t),
@@ -249,6 +249,8 @@ def benchmark(
                 print err
                 pass
 
+            it += 1
+
             print "*" * 80
             print "*" * 80
             pprint(kwargs)
@@ -260,7 +262,6 @@ def benchmark(
             print "*" * 80
             print "*" * 80
 
-            it += 1
 
         print "Writing", out_fname
         pkl.dump(results, open(out_fname, 'w+'), protocol=pkl.HIGHEST_PROTOCOL)
