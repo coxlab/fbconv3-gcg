@@ -269,7 +269,7 @@ def benchmark(
 # ------------------------------------------------------------------------------
 def main():
 
-    usage = "Usage: %prog [options] <ouput_path> <inputs_fname> [<metaparams_fname>] "
+    usage = "Usage: %prog [options] <output_path> <inputs_fname> [<metaparams_fname>] "
 
 #     detected_methods = [path.splitext(fname)[-2].split('fbconv3_')[-1]
 #                         for fname in glob('fbconv3_*.py')
