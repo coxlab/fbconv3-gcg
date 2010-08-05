@@ -51,12 +51,14 @@ def default_vs_autotuned(fname):
     sel_gflops = [sp.median(gflop/sp.array(t['timings']['cuda'])[:half_runs])
                   for t in all_timings]    
     autotuned_idx = sp.argmax(sel_gflops)
-    # then, then compute (unbiased) performance
+    # then, compute (unbiased) performance
     autotuned_timings = sp.array(all_timings[autotuned_idx]['timings']['cuda'][half_runs:])
     autotuned_gflops = sp.median(gflop/autotuned_timings)
     autotuned_std = sp.std(gflop/autotuned_timings)
     autotuned_metaparams = all_timings[autotuned_idx]['metaparams']
     
+    percent_boost = 100. * ((autotuned_gflops - default_gflops) / default_gflops)
+
     # -- print the info
     fname_info = fname.split("__")
     print "=" * 80
@@ -72,6 +74,8 @@ def default_vs_autotuned(fname):
     print "gflops: median=%.2f std=%.2f" % (autotuned_gflops, autotuned_std)
     print "metaparams:"
     pprint(autotuned_metaparams)
+    print "-" * 80
+    print "percent boost: %.2f%%" % percent_boost
     print "=" * 80   
 
 # ------------------------------------------------------------------------------
