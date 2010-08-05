@@ -281,6 +281,8 @@ class FilterOp(object):
             [func(*args) for func, args in self._cudafunc_call_l]
         except driver.LaunchError, err:
             raise InvalidConfig(err)
+
+        # XXX: timing here?
         end.record()
         
         end.synchronize()
