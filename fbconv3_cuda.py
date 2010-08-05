@@ -17,6 +17,9 @@ atexit.register(context.pop)
 def get_device_attribute(name):
     return device.get_attribute(device_attribute.__dict__[name])
 device_name = device.name().replace(' ', '_')
+print "=" * 80
+print "Using:", device_name
+print "=" * 80
 
 #import os
 from os import path
