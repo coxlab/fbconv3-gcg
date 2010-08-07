@@ -66,17 +66,20 @@ def default_vs_autotuned(fname):
     print "Input:", " ".join(fname_info[3:])
     print "-" * 80
     print "[DEFAULT]"
-    print "gflops: median=%.2f std=%.2f" % (default_gflops, default_std)
+    print "gflops: median=%.3f std=%.3f" % (default_gflops, default_std)
     print "metaparams:"
     pprint(default_metaparams)
     print "-" * 80
     print "[AUTOTUNED]"
-    print "gflops: median=%.2f std=%.2f" % (autotuned_gflops, autotuned_std)
+    print "gflops: median=%.3f std=%.3f" % (autotuned_gflops, autotuned_std)
     print "metaparams:"
     pprint(autotuned_metaparams)
     print "-" * 80
     print "percent boost: %.2f%%" % percent_boost
-    print "=" * 80   
+    print "=" * 80
+
+    return default_gflops, default_std, autotuned_gflops, autotuned_std, percent_boost
+    
 
 # ------------------------------------------------------------------------------
 def main():
