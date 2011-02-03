@@ -8,4 +8,9 @@ CUDA_DEVICE=0 python fbconv3_benchmark.py CUDA3.2_9.10 fbconv3_inputs_cherrypick
 # squid2 | C2050
 CUDA_DEVICE=2 python fbconv3_benchmark.py CUDA3.2_9.10  fbconv3_inputs_cherrypick.py fbconv3_cuda_metaparams_cherrypick.py
 
+# squid2 | C2050 again
+
+CUDA_DEVICE=2 python fbconv3_benchmark.py C2050_CUDA3.2_Ubuntu_9.10_2  fbconv3_inputs_cherrypick.py fbconv3_cuda_metaparams_cherrypick.py
+
+
 
