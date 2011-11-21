@@ -44,7 +44,7 @@ metaparams_list = [
     for spill in spill_l
     for pad_shared in pad_shared_l
     #for maxrregcount in maxrregcount_l
-    
+
     ] + [
     dict(
         block_w = 16,
@@ -63,7 +63,7 @@ metaparams_list = [
     for spill in spill_l
     for pad_shared in pad_shared_l
     #for maxrregcount in maxrregcount_l
-    
+
     ] + [
 
     dict(
@@ -83,8 +83,8 @@ metaparams_list = [
     for spill in spill_l
     for pad_shared in pad_shared_l
     #for maxrregcount in maxrregcount_l
-    
-    ] 
+
+    ]
 
 print metaparams_list
 print len(metaparams_list)

@@ -77,10 +77,10 @@ class FilterOp(object):
                                 "but you asked %d (block_w=%d * block_h=%d)."
                                 % (max_threads,
                                    block_w * block_h,block_w, block_h))
-        
+
         # XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
         garr_out_l = out_._garr_l
-        garr_in_l = in_._garr_l        
+        garr_in_l = in_._garr_l
 
         # original shapes
         in_h, in_w, in_d = in_.height, in_.width, in_.depth
@@ -97,7 +97,7 @@ class FilterOp(object):
             n_filter_rows = fb_h
 
         if n_output4s == 'all':
-            n_output4s = len(garr_out_l)         
+            n_output4s = len(garr_out_l)
 
         if fb_h % n_filter_rows != 0:
             raise InvalidConfig("fb_h (%d) "
@@ -194,7 +194,7 @@ class FilterOp(object):
 
         # -- reference to texture memory
         if use_tex1dfetch:
-            if fb_d == 1: 
+            if fb_d == 1:
                 tex = mod.get_texref("tex_float")
                 tex.set_format(driver.array_format.FLOAT, 1)
             else:
@@ -221,7 +221,7 @@ class FilterOp(object):
             max_const = get_device_attribute('TOTAL_CONSTANT_MEMORY')
             if fb_sub.nbytes > max_const:
                 raise InvalidConfig("fb_sub.nbytes (%d) is too large (max_const=%d)."
-                                    % (fb_sub.nbytes, max_const))                
+                                    % (fb_sub.nbytes, max_const))
 
             driver.memcpy_htod(const, fb_sub.data)
 
@@ -230,11 +230,11 @@ class FilterOp(object):
 
         max_regs = get_device_attribute('MAX_REGISTERS_PER_BLOCK')
         max_smem = get_device_attribute('MAX_SHARED_MEMORY_PER_BLOCK')
-        
+
         for o4z in xrange(len(garr_out_l)/n_output4s):
 
             for iz, garr_in in enumerate(garr_in_l):
-                
+
                 if use_tex1dfetch:
                     # add call: bind input texture
                     cudafunc_call_l += [(garr_in.bind_to_texref, (tex,))]
@@ -255,12 +255,12 @@ class FilterOp(object):
                         raise InvalidConfig(
                             "cudafunc.cudafunc.shared_size_bytes (%d) "
                             "is too large (max_regs=%d)."
-                            % (fb_sub.cudafunc.num_regs, max_regs))                        
-                    
+                            % (fb_sub.cudafunc.num_regs, max_regs))
+
                     # add call: fill constant memory
                     cudafunc_call_l += [(fill_const_nocache, (j, iz, o4z))]
 
-                    # add call: compute 
+                    # add call: compute
                     cudafunc_call_l += [(cudafunc.prepared_call,
                                          [grid2, garr_in.gpudata] +
                                          [garr_out_l[o4z*n_output4s + i].gpudata
@@ -270,15 +270,15 @@ class FilterOp(object):
                 # -
             # -
         # -
-        
+
         self._cudafunc_call_l = cudafunc_call_l
 
     # -------------------------------------------------------------------------
     def __call__(self, **plugin_args):
-        
+
         start = driver.Event()
         end = driver.Event()
-        
+
         start.record()
         try:
             [func(*args) for func, args in self._cudafunc_call_l]
@@ -287,9 +287,9 @@ class FilterOp(object):
 
         # XXX: timing here?
         end.record()
-        
+
         end.synchronize()
-        
+
         return end.time_since(start)*1e-3
 
 
@@ -303,7 +303,7 @@ class Input(object):
         #assert nimgs == 1
         assert height == width
         assert depth % 4 == 0 or depth == 1
-        assert dtype == 'float32'        
+        assert dtype == 'float32'
 
         #self.nimgs = nimgs
         self.height = height
@@ -344,7 +344,7 @@ class Input(object):
             g_l[0].get(data)
             return data[:my_h,:my_w,:my_d][index].copy()
 
-        # -- 
+        # --
         ngarrs = len(g_l)
 
         harr = self._arr_tmp
@@ -387,7 +387,7 @@ class Input(object):
 
         # -- standard update
         else:
-            if index != slice(None,None,None):                
+            if index != slice(None,None,None):
                 harr = self[:]
                 harr[index] = value
             else:

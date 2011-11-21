@@ -25,21 +25,21 @@ inputs_list = [
          n_filters = 32,
          fsize = 13,
          ),
-    
+
     dict(height = 1024,
          width = 1024,
          depth = 8,
          n_filters = 16,
          fsize = 5,
          ),
-    
+
     dict(height = 2048,
          width = 2048,
          depth = 4,
          n_filters = 4,
          fsize = 8,
          ),
-    
+
     ]
 
 print inputs_list

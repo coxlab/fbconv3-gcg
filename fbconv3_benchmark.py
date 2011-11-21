@@ -64,7 +64,7 @@ def benchmark_run(
     in_data = sp.random.randn(height, width, depth).astype('float32')
     fb_data = sp.random.randn(n_filters, fsize, fsize, depth).astype('float32')
     out_data = sp.empty((height-fsize+1, width-fsize+1, n_filters), dtype='float32')
-        
+
     gflop = out_data.size * (fsize * fsize * depth * 2) / (1000.**3.)
 
     if not noverify:
@@ -90,7 +90,7 @@ def benchmark_run(
             pkl.dump(out_gt, open(fname, 'w+'),
                      protocol=pkl.HIGHEST_PROTOCOL)
         else:
-            print "Loading ground truth (CPU/numpy) ..."            
+            print "Loading ground truth (CPU/numpy) ..."
             out_gt = pkl.load(open(fname))
 
     all_timings = {}
@@ -100,21 +100,21 @@ def benchmark_run(
                                 #'set_up',
                                 'process',
                                 'cuda',
-                                'download',                                    
+                                'download',
                                 )
                     ]
                    )
 
     in_ = mod.Input(height, width, depth)
     fb_ = mod.Filterbank(n_filters, fsize, fsize, depth)
-    out_ = mod.Output(height-fsize+1, width-fsize+1, n_filters)        
+    out_ = mod.Output(height-fsize+1, width-fsize+1, n_filters)
 
     # -- set-up operation (e.g. compilation)
     fb_[:] = 0
     fop = mod.FilterOp(in_, fb_, out_, **metaparams)
 
     for i in xrange(n_warmups + n_runs):
-        print "=" * 80 
+        print "=" * 80
         print "Trial %03d (%s)" % (i+1, 'run' if i >= n_warmups else 'warmup')
 
         # -- upload data
@@ -126,7 +126,7 @@ def benchmark_run(
         t_upload = end-start
 
         # -- process convolution
-        # XXX: Filter != Conv 
+        # XXX: Filter != Conv
         start = time.time()
         t_cuda = fop()
         end = time.time()
@@ -161,7 +161,7 @@ def benchmark_run(
                                  'mean': sp.mean(t),
                                  'std': sp.std(t),
                                  'max': max(t),
-                                 'min': min(t),                                     
+                                 'min': min(t),
                                  }
                            )
                           for key, t in timings.iteritems()
@@ -179,8 +179,8 @@ def benchmark_run(
     pprint(gflops_cuda)
 
     return timings, gflop
-    
-    
+
+
 def benchmark(
     output_path,
     inputs_fname,
@@ -218,12 +218,12 @@ def benchmark(
 
     for ii, inputs in enumerate(inputs_list):
         pprint(inputs)
-        
+
         kwargs = inputs
 
         out_fname = mod.device_name + "__"
         out_fname += sha1(open('fbconv3_cuda.py').read()).hexdigest() + "__"
-        out_fname += sha1(open('fbconv3_cuda.template.cu').read()).hexdigest() + "__"        
+        out_fname += sha1(open('fbconv3_cuda.template.cu').read()).hexdigest() + "__"
         out_fname += "__".join(["%s=%s" % (key, value) for key, value in inputs.iteritems()])
         out_fname = path.join(output_path, out_fname + '.pkl')
 
@@ -232,7 +232,7 @@ def benchmark(
 
         results = []
         for im, metaparams in enumerate(metaparams_list):
-            
+
             kwargs.update({'metaparams': metaparams,
                            'n_warmups': n_warmups,
                            'n_runs': n_runs,
@@ -274,7 +274,7 @@ def main():
 #     detected_methods = [path.splitext(fname)[-2].split('fbconv3_')[-1]
 #                         for fname in glob('fbconv3_*.py')
 #                         ]
-    
+
 #     usage = "Usage: %prog [options] <method> <inputs_fname> [<metaparams_fname>] "
 #     usage += "\nDetected methods: "
 #     usage += ", ".join(detected_methods)
@@ -282,21 +282,21 @@ def main():
 #     usage += " fbconv3_inputs.py fbconv3_%s_metaparams.py" % detected_methods[0]
 
     parser = optparse.OptionParser(usage=usage)
-    
+
     parser.add_option("--n_warmups",
                       type = "int",
                       metavar = "INT",
                       default=DEFAULT_N_WARMUPS,
-                      help="number of warmup runs before benchmark " 
+                      help="number of warmup runs before benchmark "
                       "[default=%default]")
-    
+
     parser.add_option("--n_runs",
                       type = "int",
                       metavar = "INT",
                       default=DEFAULT_N_RUNS,
-                      help="number of runs (benchmark) " 
+                      help="number of runs (benchmark) "
                       "[default=%default]")
-    
+
     parser.add_option("--noverify",
                       default=DEFAULT_NOVERIFY,
                       action="store_false" if DEFAULT_NOVERIFY else "store_true",
@@ -314,7 +314,7 @@ def main():
             metaparams_fname = args[2]
         else:
             metaparams_fname = None
-            
+
         kwargs = eval(str(opts))
 
         benchmark(
@@ -322,7 +322,7 @@ def main():
             inputs_fname,
             metaparams_fname,
             **kwargs)
-                       
+
 # ------------------------------------------------------------------------------
 if __name__ == "__main__":
     main()

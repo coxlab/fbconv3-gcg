@@ -45,7 +45,7 @@ class FilterOp(object):
         out_h, out_w, out_d = out_.height, out_.width, out_.depth
 
         assert out_d == fb_n
-        
+
         # padded shapes
         garr_in_h, garr_in_w, garr_in_d = in_._garr_l[0].shape
         garr_out_h, garr_out_w, garr_out_d = out_._garr_l[0].shape
@@ -95,7 +95,7 @@ class FilterOp(object):
                       for j in xrange(fb_h)]
 
         # -- reference to texture memory
-        if fb_d == 1: 
+        if fb_d == 1:
             tex = mod.get_texref("tex_float")
             tex.set_format(driver.array_format.FLOAT, 1)
         else:
@@ -105,7 +105,7 @@ class FilterOp(object):
         # -- reference to constant memory
         const = mod.get_global("constant")[0]
 
-            
+
         # -- prepare function calls
         grid2 = grid[:2]
         garr_out_l = out_._garr_l
@@ -119,9 +119,9 @@ class FilterOp(object):
                 for j in xrange(fb_h)]
                 for iz in xrange(len(garr_in_l))]
                 for oz in xrange(len(garr_out_l))]
-        
+
         fb_view_uint8 = fb_._ndarray.view('uint8')
-        self._fb_hash = sha1(fb_view_uint8).hexdigest()        
+        self._fb_hash = sha1(fb_view_uint8).hexdigest()
         self._fb_sub_l = cut_fb()
 
         def fb_sub_l_update():
@@ -147,7 +147,7 @@ class FilterOp(object):
         cudafunc_call_l = []
 
         #cudafunc_call_l += [(fb_sub_l_update, ())]
-        
+
         for oz, garr_out in enumerate(garr_out_l):
 
             # XXX: clear hout
@@ -155,7 +155,7 @@ class FilterOp(object):
             #garr_out.fill(0)
             # get gpu data pointer
             garr_out_ptr = garr_out.gpudata
-            
+
             for iz, garr_in in enumerate(garr_in_l):
 
                 # bind input texture
@@ -163,7 +163,7 @@ class FilterOp(object):
                 cudafunc_call_l += [(garr_in.bind_to_texref, (tex,))]
                 # get gpu data pointer
                 garr_in_ptr = garr_in.gpudata
-                                         
+
                 for j in xrange(fb_h):
 
                     # get kernel
@@ -174,7 +174,7 @@ class FilterOp(object):
                     #cudafunc_call_l += [(driver.memcpy_htod, (const, fb_sub.data))]
                     #cudafunc_call_l += [(fill_const, (j, iz, oz))]
                     cudafunc_call_l += [(fill_const_nocache, (j, iz, oz))]
-                        
+
                     # compute
                     #cudafunc.prepared_call(grid2, garr_in_ptr, garr_out_ptr)
                     cudafunc_call_l += [(cudafunc.prepared_call, (grid2, garr_in_ptr, garr_out_ptr))]
@@ -194,7 +194,7 @@ class FilterOp(object):
         start = driver.Event()
         end = driver.Event()
         start.record()
-        [func(*args) for func, args in self._cudafunc_call_l]         
+        [func(*args) for func, args in self._cudafunc_call_l]
         end.record()
         end.synchronize()
         return end.time_since(start)*1e-3
@@ -207,7 +207,7 @@ class FilterOp(object):
         # original shapes
         fb_n, fb_h, fb_w, fb_d = fb_.nfilters, fb_.height, fb_.width, fb_.depth
         #out_h, out_w, out_d = out_.height, out_.width, out_.depth
-        
+
         garr_in_l = self.in_._garr_l
         garr_out_l = self.out_._garr_l
 
@@ -227,17 +227,17 @@ class FilterOp(object):
         grid2 = grid[:2]
         for oz, garr_out in enumerate(garr_out_l):
 
-            # clear hout 
+            # clear hout
             #garr_out.fill(0)
             # get gpu data pointer
             garr_out_ptr = garr_out.gpudata
-            
+
             for iz, garr_in in enumerate(garr_in_l):
 
                 # bind input texture and get gpu data pointer
                 garr_in.bind_to_texref(tex)
                 garr_in_ptr = garr_in.gpudata
-                                         
+
                 for j in xrange(fb_h):
 
                     # get kernel
@@ -267,7 +267,7 @@ class Input(object):
         #assert nimgs == 1
         assert height == width
         assert depth % 4 == 0 or depth == 1
-        assert dtype == 'float32'        
+        assert dtype == 'float32'
 
         #self.nimgs = nimgs
         self.height = height
@@ -288,7 +288,7 @@ class Input(object):
         else:
             ngarrs = int(np.ceil(depth / 4.))
             self._garr_l = [gpuarray.GPUArray((padh,padw,4),'float32') for _ in xrange(ngarrs)]
-        
+
         self._garr_tmp = driver.pagelocked_empty(self._garr_l[0].shape, self.dtype)
         self._arr_tmp = np.empty((ngarrs,)+self._padded_shape[:2]+(self._garr_l[0].shape[-1],), dtype='float32')
 
@@ -296,7 +296,7 @@ class Input(object):
     def __getitem__(self, index):
 
         g_l = self._garr_l
-        
+
         my_h, my_w, my_d = self.height, self.width, self.depth
         data = self._garr_tmp
 
@@ -304,8 +304,8 @@ class Input(object):
         if my_d == 1 or my_d == 4:
             g_l[0].get(data)
             return data[:my_h,:my_w,:my_d][index].copy()
-        
-        # -- 
+
+        # --
         ngarrs = len(g_l)
 
         harr = self._arr_tmp
@@ -322,11 +322,11 @@ class Input(object):
             return out.copy()
         else:
             return out[index].copy()
-        
+
     # -------------------------------------------------------------------------
     def setitem_opt_tmp(self, value): # pragma: no cover
         g_l = self._garr_l
-        
+
         for i in xrange(len(g_l)):
             g_l[i].set(value[:,:,i*4:(i+1)*4])
 
@@ -339,16 +339,16 @@ class Input(object):
                and np.array(value).size == 1:
             for i in xrange(len(g_l)):
                 g_l[i].fill(float(value))
-                
+
         # -- full update
         elif index == slice(None,None,None) \
                  and value.shape == self._padded_shape:
             for i in xrange(len(g_l)):
                 g_l[i].set(np.ascontiguousarray(value[:,:,i*4:(i+1)*4]))
-                
+
         # -- standard update
         else:
-            if index != slice(None,None,None):                
+            if index != slice(None,None,None):
                 harr = self[:]
                 harr[index] = value
             else:
@@ -378,7 +378,7 @@ class Filterbank(object):
         self.width = width
         self.depth = depth
         self.dtype = dtype
-        
+
         self._ndarray = np.ndarray((nfilters,height,width,depth), dtype=dtype)
 
     # -------------------------------------------------------------------------

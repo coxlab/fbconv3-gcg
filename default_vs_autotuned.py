@@ -31,7 +31,7 @@ def default_vs_autotuned(fname):
 
     print fname
 
-    # -- 
+    # --
     gflop = all_timings[0]['gflop']
     tot_runs = len(all_timings[0]['timings']['cuda'])
     half_runs = int(tot_runs / 2)
@@ -47,16 +47,16 @@ def default_vs_autotuned(fname):
     default_std = sp.std(gflop/sp.array(default_timings['cuda'])[half_runs:])
 
     # -- performance of the autotuned configuration
-    # first, select the best performing configuration on the first half 
+    # first, select the best performing configuration on the first half
     sel_gflops = [sp.median(gflop/sp.array(t['timings']['cuda'])[:half_runs])
-                  for t in all_timings]    
+                  for t in all_timings]
     autotuned_idx = sp.argmax(sel_gflops)
     # then, compute (unbiased) performance
     autotuned_timings = sp.array(all_timings[autotuned_idx]['timings']['cuda'][half_runs:])
     autotuned_gflops = sp.median(gflop/autotuned_timings)
     autotuned_std = sp.std(gflop/autotuned_timings)
     autotuned_metaparams = all_timings[autotuned_idx]['metaparams']
-    
+
     percent_boost = 100. * ((autotuned_gflops - default_gflops) / default_gflops)
 
     # -- print the info
@@ -79,7 +79,7 @@ def default_vs_autotuned(fname):
     print "=" * 80
 
     return default_gflops, default_std, autotuned_gflops, autotuned_std, percent_boost
-    
+
 
 # ------------------------------------------------------------------------------
 def main():
@@ -87,7 +87,7 @@ def main():
     usage = "Usage: %prog [options] <filename> "
 
     parser = optparse.OptionParser(usage=usage)
-    
+
     opts, args = parser.parse_args()
 
     if len(args) != 1:
@@ -98,7 +98,7 @@ def main():
         kwargs = eval(str(opts))
 
         default_vs_autotuned(fname, **kwargs)
-                       
+
 # ------------------------------------------------------------------------------
 if __name__ == "__main__":
     main()
