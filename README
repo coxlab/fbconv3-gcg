@@ -1,7 +1,9 @@
 Example of use:
 ---------------
 
-python fbconv3_benchmark.py tmp fbconv3_inputs_cherrypick.py fbconv3_cuda_metaparams_cherrypick.py
+mkdir -p output_results
+
+python fbconv3_benchmark.py output_results fbconv3_inputs_cherrypick.py fbconv3_cuda_metaparams_cherrypick.py
 
 
 
