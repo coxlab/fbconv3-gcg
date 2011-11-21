@@ -155,7 +155,7 @@ def benchmark_run(
     if not noverify:
         print "Verify last output..."
         #diffmax = max(sp.absolute(out_data-out_gt).ravel())
-        testing.assert_array_almost_equal(out_data, out_gt, 1e-3)
+        testing.assert_array_almost_equal(out_data, out_gt, decimal=3)
 
     timings_stats = dict([(key, {'median': sp.median(t),
                                  'mean': sp.mean(t),
