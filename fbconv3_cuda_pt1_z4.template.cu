@@ -54,7 +54,7 @@ extern "C" {
 #for n in xrange($NF)
     float sum$n = 0;
 #end for
-    
+
 #for d in xrange($Z)
 #for i in xrange($FILTER_W)
     v = shared_in[threadIdx.y][$d][threadIdx.x+$i];
@@ -74,7 +74,7 @@ extern "C" {
     output[out_idx].y += sum1;
     output[out_idx].z += sum2;
     output[out_idx].w += sum3;
-  }  
+  }
 #end for
 
 }

@@ -14,7 +14,7 @@
 #set xyzw = ['x','y','z','w']
 
 #if $USE_TEX1DFETCH
-// -- Declare a float4 1D texture 
+// -- Declare a float4 1D texture
 // that will be used to fetch input values
 texture<float4, 1, cudaReadModeElementType> tex_float4;
 #end if
@@ -40,33 +40,33 @@ extern "C" {
 #end for
    )
   {
-   
+
     // -- Shared-memory buffer for the input tiles
     __shared__ float shared_in			\
       [$BLOCK_H]				\
       [$N_FILTER_ROWS]				\
       [$INPUT_D]				\
       [$INPUT_BLOCK_W + ${int($PAD_SHARED)}] ;
-    
+
     // -- Input/Output "pointers"
     const uint in_idx =				   \
       IMUL(IMUL(blockIdx.y, $BLOCK_H), $INPUT_W) + \
       IMUL(IMUL($nk, $INPUT_W), $N_FILTER_ROWS) +  \
       IMUL(threadIdx.y, $INPUT_W) +		   \
       IMUL(blockIdx.x, $BLOCK_W) + threadIdx.x ;
-    
+
     const uint out_idx =				\
       IMUL(IMUL(blockIdx.y, $BLOCK_H), $OUTPUT_W) +	\
       IMUL(threadIdx.y, $OUTPUT_W) +			\
       IMUL(blockIdx.x, $BLOCK_W) + threadIdx.x ;
-    
+
 #if $SPILL
     // Create a shared-memory buffer to spill a register value
     // into shared memory and thus reduce the register count.
     __shared__ uint s_out_idx[$BLOCK_H][$BLOCK_W + ${int($PAD_SHARED)}];
     s_out_idx[threadIdx.y][threadIdx.x] = out_idx;
 #end if
-    
+
     // -------------------------------------------------------------------------
     // -- Load input to shared-memory
     // -------------------------------------------------------------------------

@@ -1,10 +1,14 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
+# TODO: refactor this old dude, pep8, etc.
+# TODO: remove print, replace with log
+
+import os
 import numpy as np
-import ctypes
-from copy import copy, deepcopy
-from hashlib import sha1
+import logging
+logging.basicConfig(level=logging.INFO)
+log = logging.getLogger(__name__)
 
 # Initialize CUDA
 from pycuda import driver, gpuarray, compiler, tools
@@ -14,9 +18,12 @@ context = tools.make_default_context()
 device = context.get_device()
 import atexit
 atexit.register(context.pop)
+
+
 def get_device_attribute(name):
     return device.get_attribute(device_attribute.__dict__[name])
 device_name = device.name().replace(' ', '_')
+
 print "=" * 80
 print "Using:", device_name
 print "=" * 80
@@ -24,10 +31,7 @@ print "=" * 80
 #import os
 from os import path
 
-from pythor2.utils import mkdir_p
-
 #import pycuda.autoinit
-from pycuda import gpuarray
 from pycuda import driver
 from Cheetah.Template import Template
 
@@ -37,6 +41,7 @@ from fbconv3_utils import InvalidConfig, MYPATH
 PADFACTOR_H = 16
 PADFACTOR_W = 16
 
+
 # =============================================================================
 class FilterOp(object):
 
@@ -44,17 +49,17 @@ class FilterOp(object):
     def __init__(self,
                  in_, fb_, out_,
                  # -- meta-programming parameters
-                 block_w = 8,
-                 block_h = 8,
-                 n_filter_rows = 1, # 1, 2, 4, 8, 16
-                 n_output4s = 'all', # 'all', 1, 2, 4, 8, 16
-                 spill = False, # False, True
-                 imul_fast = True, # True, False
-                 pad_shared = True, # True, False
-                 use_tex1dfetch = True, # True, False
-                 maxrregcount = None, # None, 8, 16, 32
+                 block_w=8,
+                 block_h=8,
+                 n_filter_rows=1,  # 1, 2, 4, 8, 16
+                 n_output4s='all',  # 'all', 1, 2, 4, 8, 16
+                 spill=False,  # False, True
+                 imul_fast=True,  # True, False
+                 pad_shared=True,  # True, False
+                 use_tex1dfetch=True,  # True, False
+                 maxrregcount=None,  # None, 8, 16, 32
                  # --
-                 use_fast_math = False,
+                 use_fast_math=False,
                  ):
 
         # block of threads
@@ -76,7 +81,7 @@ class FilterOp(object):
                                 "The current device supports %d threads, "
                                 "but you asked %d (block_w=%d * block_h=%d)."
                                 % (max_threads,
-                                   block_w * block_h,block_w, block_h))
+                                   block_w * block_h, block_w, block_h))
 
         # XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
         garr_out_l = out_._garr_l
@@ -84,7 +89,8 @@ class FilterOp(object):
 
         # original shapes
         in_h, in_w, in_d = in_.height, in_.width, in_.depth
-        fb_n, fb_h, fb_w, fb_d = fb_.n_filters, fb_.height, fb_.width, fb_.depth
+        fb_n, fb_h, fb_w, fb_d = \
+                fb_.n_filters, fb_.height, fb_.width, fb_.depth
         out_h, out_w, out_d = out_.height, out_.width, out_.depth
 
         assert out_d == fb_n
@@ -114,7 +120,8 @@ class FilterOp(object):
         #self.out_ = out_
 
         # grid of blocks
-        grid = (int(np.ceil(1.*garr_out_w/block_w)),(int(np.ceil(1.*garr_out_h/block_h))), 1)
+        grid = (int(np.ceil(1.*garr_out_w/block_w)),
+                (int(np.ceil(1.*garr_out_h/block_h))), 1)
         grid_w, grid_h = grid[:2]
 
         max_grid_w = get_device_attribute("MAX_GRID_DIM_X")
@@ -171,19 +178,32 @@ class FilterOp(object):
         tmpl = Template(file=tmpl_fname, searchList=[topts])
         outstr = tmpl.respond()
 
-        # - compile source
-        opt_l = []
-        #opt_l += ["--opencc-options=-v,-OPT:0limit=0,-O3,-LIST:source=on"]
-        #opt_l += ["--ptxas-options=-v"]
+        # -- nvcc flags
+        opt_l = os.environ.get("PYCUDA_DEFAULT_NVCC_FLAGS", "").split()
         if maxrregcount is not None:
             opt_l += ["--maxrregcount=%d" % maxrregcount]
         if use_fast_math:
             opt_l += ["--use_fast_math"]
+        log.info("NVCC options: %s", opt_l)
 
+        # -- compile source
         try:
             cubin_str = compiler.compile(outstr, options=opt_l)
         except driver.CompileError, err:
-            raise InvalidConfig(err.msg)
+            # XXX: better handling of known errors
+            if "#error -- unsupported GNU version" in err.stderr:
+                log.critical(
+                    "Please use the env variable "
+                    "PYCUDA_DEFAULT_NVCC_FLAGS to specify a "
+                    "compiler bindir < gcc-4.4, for example: "
+                    "export PYCUDA_DEFAULT_NVCC_FLAGS="
+                    "'--compiler-bindir=$(gcc-config "
+                    "-B x86_64-pc-linux-gnu-4.4.5)'")
+                raise err
+            #log.critical("%s: %s", err.msg, err.stderr)
+            #raise err
+            #else:
+                #raise InvalidConfig("%s: %s" % (err.msg, err.stderr))
 
         # - XXX
         mod = driver.module_from_buffer(cubin_str)
