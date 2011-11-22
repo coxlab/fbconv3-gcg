@@ -201,7 +201,7 @@ class FilterOp(object):
                     "-B x86_64-pc-linux-gnu-4.4.5)'")
                 raise err
             #log.critical("%s: %s", err.msg, err.stderr)
-            #raise err
+            raise err
             #else:
                 #raise InvalidConfig("%s: %s" % (err.msg, err.stderr))
 
