@@ -74,13 +74,13 @@ class FBCorr3Bandit(Bandit):
         except fbconv3_utils.InvalidConfig:
             print 'InvalidConfig', metaparams
             return dict(loss=0,
-                    timings=None,
+                    timings={},
                     status='fail',
                     reason='invalidconfig')
         except pycuda.driver.CompileError:
             print 'CompileError', metaparams
             return dict(loss=0,
-                    timings=None,
+                    timings={},
                     status='fail',
                     reason='CompileError')
 
