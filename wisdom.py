@@ -26,6 +26,16 @@ class OpSpec(object):
         self.__dict__.update(locals())
         del self.self
 
+    def __eq__(self, other):
+        return (type(self) == type(other)
+                and (self.features() == other.features()))
+
+    def __ne__(self, other):
+        return not self == other
+
+    def __hash__(self):
+        return hash((type(self),) + tuple(self.features()))
+
     def __repr__(self):
         assigns = ['%s=%s' % (n, v) for v, n in self.features()]
         return "OpSpec(%s)" % ", ".join(assigns)
@@ -64,6 +74,21 @@ def random_op_spec(rng):
         "use_fast_math", one_of(False, True),
         ).sample(rng)
     return OpSpec(**dct)
+
+def random_op_cross(op1, op2, rng, r=.5):
+    return OpSpec(
+            op1.block_w if rng.rand() < r else op2.block_w,
+            op1.block_h if rng.rand() < r else op2.block_h,
+            op1.n_filter_rows if rng.rand() < r else op2.n_filter_rows,
+            op1.n_output4s if rng.rand() < r else op2.n_output4s,
+            op1.spill if rng.rand() < r else op2.spill,
+            op1.imul_fast if rng.rand() < r else op2.imul_fast,
+            op1.pad_shared if rng.rand() < r else op2.pad_shared,
+            op1.use_tex1dfetch if rng.rand() < r else op2.use_tex1dfetch,
+            op1.maxrregcount if rng.rand() < r else op2.maxrregcount,
+            op1.use_fast_math if rng.rand() < r else op2.use_fast_math,
+            )
+
 
 def reference_op_spec():
     return OpSpec(block_w=8,
@@ -221,7 +246,7 @@ class ProblemSpec(object):
 
 
     def measure_speed(self, op_spec, n_warmups, n_runs, abort_thresh=None,
-            wisdom=None):
+            wisdom=None, save_on_abort=True):
         """Return GFLOPS/S of op, not counting transfer times.
 
         abort_thresh - return 0 if the true value appears to be
@@ -257,13 +282,11 @@ class ProblemSpec(object):
         fb_[:] = 0
         try:
             fop = op_spec.FilterOp(in_, fb_, out_)
-        except fbconv3_cuda.InvalidConfig:
-            return 0
-        except pycuda._driver.LogicError:
-            #XXX: cuModuleGetTexRef not found
-            return 0
-        except pycuda.driver.CompileError:
-            #XXX: using too much shared memory
+        except (fbconv3_cuda.InvalidConfig,
+                pycuda._driver.LogicError,    #XXX: cuModuleGetTexRef not found
+                pycuda.driver.CompileError,): #XXX: using too much shared memory
+            if wisdom and save_on_abort:
+                wisdom.record(self, op_spec, 0)
             return 0
 
         for i in xrange(n_warmups + n_runs):
@@ -283,12 +306,14 @@ class ProblemSpec(object):
             try:
                 t_cuda = fop()
             except fbconv3_cuda.InvalidConfig:
+                if wisdom and save_on_abort:
+                    wisdom.record(self, op_spec, 0)
                 return 0
             end = time.time()
             t_process = end - start
 
             if i > 0 and (gflop / t_cuda < abort_thresh):
-                if wisdom:
+                if wisdom and save_on_abort:
                     wisdom.record(self, op_spec, gflop / t_cuda)
                 return 0
 
@@ -365,7 +390,10 @@ class Wisdom(object):
                 rval = self._suggest_helper(feature, node['right'])
                 return lval + rval
         else:
-            return [(node['mean'], node['idxs'])]
+            if node['mean'] < -20: # these runs are failures
+                return []
+            else:
+                return [(node['mean'], node['idxs'])]
 
 
     def ranked_suggestions(self, prob_spec):
@@ -379,18 +407,28 @@ class Wisdom(object):
         #    and return the ops of that list
 
         scores_idxs = self._suggest_helper(prob_spec.features(), self._dtree)
-        scores_idxs.sort()
-        scores_idxs.reverse()
-        # XXX: make a list of all of the op_specs named in the idxs, and
-        #      remove duplicates
-        return [self._observations[idxs[0]][1]
-                for score, idxs in scores_idxs]
+        rval_specs = set()
+        rvals = []
+        for score, idxs in scores_idxs:
+            for ii in idxs:
+                op_spec = self._observations[ii][1]
+                op_speed = self._observations[ii][2]
+                if op_spec not in rval_specs:
+                    rval_specs.add(op_spec)
+                    rvals.append((op_speed, op_spec))
+        if len(rvals) == 0:
+            return [reference_op_spec()]
+        else:
+            rvals.sort()
+            rvals.reverse()
+            return [r[1] for r in rvals]
 
     def record(self, prob_spec, op_spec, speed):
         for pspec, ospec, s in self._observations:
             if (pspec == prob_spec and ospec == op_spec):
-                if abs(s-speed) > .1:
-                    raise Exception('duplicate entry w different speed')
+                if abs(np.log(s) - np.log(speed)) > np.log(1.2):
+                    raise Exception('duplicate entry w different speed',
+                            (s, speed))
                 else:
                     logger.warn('ignoring duplicate entry: %s, %s' % (
                         prob_spec, op_spec))
@@ -473,7 +511,7 @@ class Wisdom(object):
     def build_dtree(self, force=True):
         if not force:
             if (len(self._observations) < 10 or
-                    len(self._observations) < 1.25 * self._dtree_n_obs):
+                    len(self._observations) < 1.1 * self._dtree_n_obs):
                 return
         features = []
         targets = []
@@ -503,10 +541,10 @@ class Wisdom(object):
                 print 'OBS', i, o[1]
                 print 'OBS', i, o[2]
 
-        self.print_dtree(self._dtree)
-
-    def print_dtree(self, node, prefix=""):
-        if node == self._dtree:
+    def print_dtree(self, node=None, prefix=""):
+        if node is None:
+            node = self._dtree
+        if node is self._dtree:
             print 'DTREE (n_obs = %i)' % len(self._observations)
         if node['kind'] == 'fork':
             print prefix,

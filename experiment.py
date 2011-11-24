@@ -3,12 +3,10 @@ For a given patience in obtaining each plan,
 how many gigaflops can you get on average from a particular problem space?
 """
 
-import logging
-logger = logging.getLogger(__name__)
-logging.basicConfig(level=logging.INFO)
-
-import sys
 import cPickle
+import logging
+import sys
+import time
 
 import numpy
 import pycuda._driver
@@ -17,11 +15,14 @@ import wisdom
 from hyperopt.ht_dist2 import one_of, rSON2
 import fbconv3_cuda
 
+logger = logging.getLogger(__name__)
+logging.basicConfig(level=logging.INFO)
+
 # XXX : should the average GFLOP/S be measured by dividing by trials or by
 #       time? (Should it be more important to tune the more expensive calls? I
 #       think yes)
 
-def problem_generator():
+def problem_generator(rng):
     # TODO: sample fbcorr parameters from within LFW models
     space = rSON2(
             "nimgs" , 1, #one_of(1, 2, 4, 8, 16),
@@ -31,7 +32,7 @@ def problem_generator():
             "fsize" , one_of(3, 5, 7, 9, 11),
             )
     while True:
-        s = space.sample(rng=numpy.random)  # new seed on every execution
+        s = space.sample(rng=rng)
         prob_spec = wisdom.ProblemSpec(
                 n_imgs=s['nimgs'],
                 height=s['isize'],
@@ -54,44 +55,61 @@ def main_step():
     _python, _cmd, wisdomfile, N = sys.argv
 
     try:
-        wdb, results = cPickle.load(open(wisdomfile))
+        wdb, results, rng = cPickle.load(open(wisdomfile))
     except (IOError, EOFError):
-        wdb, results = wisdom.Wisdom(), []
+        wdb, results, rng = wisdom.Wisdom(), [], numpy.random.RandomState(2)
 
-    patience = 20  # seconds
-    for i, prob_spec in zip(range(int(N)), problem_generator()):
-        wdb.build_dtree(force=False)
-        print prob_spec
-        smart_op_spec = prob_spec.plan(patience=patience,
-                wisdom=wdb,
-                verbose=1)
-        smart_speed = prob_spec.measure_speed(smart_op_spec,
-                n_warmups=2, n_runs=3)
+    pgen = problem_generator(rng)
 
-        ref_op_spec = wisdom.reference_op_spec()
+    prob_spec = pgen.next()
+    print prob_spec
+    wdb.build_dtree(force=False)
+    print 'n_observations', len(wdb._observations)
+
+    smart_op_spec = prob_spec.plan(patience=-1,
+            wisdom=wdb,
+            verbose=1)
+    ref_op_spec = wisdom.reference_op_spec()
+
+    smart_speed = prob_spec.measure_speed(smart_op_spec,
+            n_warmups=2, n_runs=5,
+            wisdom=wdb)
+
+    if smart_op_spec != ref_op_spec:
         ref_speed = prob_spec.measure_speed(ref_op_spec,
-                n_warmups=2, n_runs=3)
-
-        # XXX: also consider taking max over N random op_specs as stiffer
-        #      competition
-        for ii in xrange(50):
-            try:
-                random_op_spec = wisdom.random_op_spec(numpy.random)
-                random_speed = prob_spec.measure_speed(random_op_spec,
-                        n_warmups=2, n_runs=3)
-                break
-            except fbconv3_cuda.InvalidConfig:
-                random_speed = 0
-                continue
+                n_warmups=2, n_runs=5,
+                wisdom=wdb if ref_op_spec != smart_op_spec else None)
         finding = dict(
                 smart=smart_speed,
-                ref=ref_speed,
-                random=random_speed)
-        print 'FINDING', finding
+                ref=ref_speed)
         results.append(finding)
-        ofile = open(wisdomfile, 'w')
-        cPickle.dump((wdb, results), ofile)
-        ofile.close()
+        best_op_spec = smart_op_spec if smart_speed > ref_speed else ref_op_spec
+    else:
+        results.append(dict(smart=smart_speed, ref=smart_speed))
+        best_op_spec = smart_op_spec
+
+    print 'FINDING', results[-1]
+    # -- some exploration
+    N = float(N)
+    while N > 0:
+        random_op_spec = wisdom.random_op_cross(best_op_spec,
+                wisdom.random_op_spec(rng),
+                rng, .75)
+
+        if random_op_spec == best_op_spec:
+            N -= .2
+            continue
+        random_speed = prob_spec.measure_speed(random_op_spec,
+            n_warmups=2, n_runs=5,
+            wisdom=wdb,
+            abort_thresh=smart_speed * .75, # should be best speed
+            save_on_abort=False)
+        print random_speed
+        N -= 1
+
+    ofile = open(wisdomfile, 'w')
+    cPickle.dump((wdb, results, rng), ofile)
+    ofile.close()
 
 
 def main_insert_random_stuff():
@@ -104,23 +122,22 @@ def main_insert_random_stuff():
 
     patience = 20  # seconds
     for i, prob_spec in zip(range(int(N)), problem_generator()):
-        for ii in xrange(50):
-            try:
-                random_op_spec = wisdom.random_op_spec(numpy.random)
-                random_speed = prob_spec.measure_speed(random_op_spec,
-                        n_warmups=2, n_runs=3)
-                break
-            except fbconv3_cuda.InvalidConfig:
-                random_speed = 0
-                continue
-            except pycuda._driver.LogicError:
-                #XXX: cuModuleGetTexRef not found
-                random_speed = 0
-                continue
-            except pycuda._driver.CompileError:
-                #XXX: cuModuleGetTexRef not found
-                random_speed = 0
-                continue
+        try:
+            random_op_spec = wisdom.random_op_spec(numpy.random)
+            random_speed = prob_spec.measure_speed(random_op_spec,
+                    n_warmups=2, n_runs=6)
+            break
+        except fbconv3_cuda.InvalidConfig:
+            random_speed = 0
+            continue
+        except pycuda._driver.LogicError:
+            #XXX: cuModuleGetTexRef not found
+            random_speed = 0
+            continue
+        except pycuda._driver.CompileError:
+            #XXX: cuModuleGetTexRef not found
+            random_speed = 0
+            continue
         print 'RANDOM:', random_speed
         wdb.record(prob_spec, random_op_spec, random_speed)
 
@@ -136,12 +153,13 @@ def main_dtree():
 
 def main_fig1():
     _python, _cmd, wisdomfile = sys.argv
-    wdb, results = cPickle.load(open(wisdomfile))
+    wdb, results, rng = cPickle.load(open(wisdomfile))
     import matplotlib.pyplot as plt
     y = [r['smart'] / r['ref'] for r in results]
-    plt.scatter(range(len(y)), y)
+    plt.scatter(numpy.arange(len(y)), y)
     plt.xlabel('amount of training data')
     plt.ylabel('speed of dtree / speed of reference')
+    plt.axhline(1.0)
     plt.show()
 
 
