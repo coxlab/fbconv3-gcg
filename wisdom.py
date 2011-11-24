@@ -414,6 +414,9 @@ class Wisdom(object):
                 op_spec = self._observations[ii][1]
                 op_speed = self._observations[ii][2]
                 if op_spec not in rval_specs:
+                    #XXX if an op_spec appears multiple times scoring various
+                    #    speeds for various problems, which score should we
+                    #    report here?
                     rval_specs.add(op_spec)
                     rvals.append((op_speed, op_spec))
         if len(rvals) == 0:
