@@ -64,8 +64,19 @@ def main_step():
 
         prob_spec = pgen.next()
         print prob_spec
-        wdb.build_dtree(force=False)
+        if len(wdb._observations) > 3 + getattr(wdb, '_dtree_n_obs', 0):
+            wdb.build_dtree(force=True)
         print 'n_observations', len(wdb._observations)
+
+        #
+        # The strategy for updating the training set seems to be important.
+        # Currently, what seems to work best is that the speed of the
+        # suggestion from plan is ALWAYS fed back as a training example, but
+        # the feedback of other suggestion mechanisms (ref, random, etc.) is
+        # only fed into the training set if it's an improvement over the
+        # current best suggestion. Therefore only errors are corrected, and
+        # the training set stays "focused?"
+        #
 
         smart_op_spec = prob_spec.plan(patience=-1,
                 wisdom=wdb,
@@ -79,7 +90,9 @@ def main_step():
         if smart_op_spec != ref_op_spec:
             ref_speed = prob_spec.measure_speed(ref_op_spec,
                     n_warmups=2, n_runs=5,
-                    wisdom=wdb if ref_op_spec != smart_op_spec else None)
+                    wisdom=None)
+            if ref_speed > smart_speed:
+                wdb.record(prob_spec, ref_op_spec, ref_speed)
             finding = dict(
                     smart=smart_speed,
                     ref=ref_speed)
@@ -102,9 +115,11 @@ def main_step():
                 continue
             random_speed = prob_spec.measure_speed(random_op_spec,
                 n_warmups=2, n_runs=5,
-                wisdom=wdb,
+                wisdom=None,
                 abort_thresh=smart_speed * .75, # should be best speed
                 save_on_abort=False)
+            if random_speed > smart_speed:
+                wdb.record(prob_spec, random_op_spec, random_speed)
             print random_speed
             N -= 1
     finally:

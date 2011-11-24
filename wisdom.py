@@ -214,7 +214,7 @@ class ProblemSpec(object):
         if wisdom is None:
             wisdom = Wisdom()
 
-        candidates = wisdom.ranked_suggestions(self)[:3]
+        candidates = wisdom.ranked_suggestions(self)
         encumbent = candidates[0]
         if (time.time() - t_start) >= patience:
             return encumbent
@@ -389,8 +389,9 @@ class Wisdom(object):
         self._dtree_n_obs = 0
         self._dtree = None
 
-    def _suggest_helper(self, feature, node):
+    def _suggest_helper(self, feature, node, prefix=""):
         if node['kind'] == 'fork':
+            print prefix,
             if node['feature'] < len(feature):
                 if feature[node['feature']] < node['value']:
                     print '-- branch ', node['feature_name'], '<', node['value']
@@ -398,11 +399,11 @@ class Wisdom(object):
                 else:
                     print '-- branch ', node['feature_name'], '>=', node['value']
                     child = node['right']
-                return self._suggest_helper(feature, child)
+                return self._suggest_helper(feature, child, prefix+"  ")
             else:
                 print '-- ignoring', node['feature_name'], '<', node['value']
-                lval = self._suggest_helper(feature, node['left'])
-                rval = self._suggest_helper(feature, node['right'])
+                lval = self._suggest_helper(feature, node['left'], prefix+"  ")
+                rval = self._suggest_helper(feature, node['right'], prefix+"  ")
                 return lval + rval
         else:
             if node['mean'] < -20: # these runs are failures
@@ -461,6 +462,8 @@ class Wisdom(object):
     def build_dtree_rec(self, features, targets, global_idxs, feature_names,
             min_improvement=.1,
             min_split_size=3):
+        assert len(features) == len(targets) == len(global_idxs)
+        assert features.shape[1] == len(feature_names)
         targets_var = np.var(targets)
         total_sse = (len(targets) * targets_var)
         logger.debug('total squared error = %f' % total_sse)
@@ -474,15 +477,14 @@ class Wisdom(object):
         best_sse = float('inf')
 
         for i in xrange(features.shape[1]):
-            features_i = features[:,i]
+            features_i = features[:, i]
             order_i = np.argsort(features_i)
 
             sorted_target = targets[order_i]
 
             # XXX : do this in linear time instead of quadratic!
             # XXX: check for off by 1
-            for j in xrange(min_split_size,
-                    len(features) - 1 - min_split_size):
+            for j in xrange(min_split_size, len(features) - min_split_size):
                 if features_i[order_i[j - 1]] != features_i[order_i[j]]:
                     below = sorted_target[:j]
                     above = sorted_target[j:]
@@ -498,7 +500,7 @@ class Wisdom(object):
                         best_ij = (i, j, split_pt)
                         best_sse = new_total_sse
 
-        if best_sse < total_sse - min_improvement:
+        if best_sse < (total_sse - min_improvement):
             ii, jj, split_pt = best_ij
             one_to_n = np.arange(len(features))
             leftidxs = one_to_n[features[:, ii] < split_pt]
