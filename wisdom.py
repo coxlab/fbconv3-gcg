@@ -205,6 +205,10 @@ class ProblemSpec(object):
 
         # XXX: why does rng = np.random not resample things??
         rng = np.random.RandomState(int(time.time() * 1000))
+        # XXX: instead of drawing randomly
+        #      - draw randomly and filter using the dtree
+        #      - randomly perturb and hillclimb from the encumbent
+        #      - run some other kind of optimization strategy here
         while (time.time() - t_start) < patience:
             candidate = random_op_spec(rng)
             candidate_speed = clock_candidate()
@@ -377,10 +381,8 @@ class Wisdom(object):
         scores_idxs = self._suggest_helper(prob_spec.features(), self._dtree)
         scores_idxs.sort()
         scores_idxs.reverse()
-        #print 'SUGGESTIONS'
-        #print scores_idxs[0][0], self._observations[scores_idxs[0][1][0]]
-        #print scores_idxs[1][0], self._observations[scores_idxs[1][1][0]]
-        #print scores_idxs[2][0], self._observations[scores_idxs[2][1][0]]
+        # XXX: make a list of all of the op_specs named in the idxs, and
+        #      remove duplicates
         return [self._observations[idxs[0]][1]
                 for score, idxs in scores_idxs]
 

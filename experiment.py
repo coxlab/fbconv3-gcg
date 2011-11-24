@@ -93,6 +93,7 @@ def main_step():
         cPickle.dump((wdb, results), ofile)
         ofile.close()
 
+
 def main_insert_random_stuff():
     _python, _cmd, wisdomfile, N = sys.argv
 
@@ -125,11 +126,24 @@ def main_insert_random_stuff():
 
     cPickle.dump(wdb, open(wisdomfile, 'w'))
 
+
 def main_dtree():
     _python, _cmd, wisdomfile = sys.argv
     wdb = cPickle.load(open(wisdomfile))
     wdb.build_dtree()
     cPickle.dump(wdb, open(wisdomfile, 'w'))
+
+
+def main_fig1():
+    _python, _cmd, wisdomfile = sys.argv
+    wdb, results = cPickle.load(open(wisdomfile))
+    import matplotlib.pyplot as plt
+    y = [r['smart'] / r['ref'] for r in results]
+    plt.scatter(range(len(y)), y)
+    plt.xlabel('amount of training data')
+    plt.ylabel('speed of dtree / speed of reference')
+    plt.show()
+
 
 if __name__ == '__main__':
     cmd = sys.argv[1]
