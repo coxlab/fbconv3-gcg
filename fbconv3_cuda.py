@@ -7,8 +7,8 @@
 import os
 import numpy as np
 import logging
-logging.basicConfig(level=logging.INFO)
 log = logging.getLogger(__name__)
+log.setLevel(logging.WARN)
 
 # Initialize CUDA
 from pycuda import driver, gpuarray, compiler, tools
