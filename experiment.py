@@ -59,57 +59,58 @@ def main_step():
     except (IOError, EOFError):
         wdb, results, rng = wisdom.Wisdom(), [], numpy.random.RandomState(2)
 
-    pgen = problem_generator(rng)
+    try:
+        pgen = problem_generator(rng)
 
-    prob_spec = pgen.next()
-    print prob_spec
-    wdb.build_dtree(force=False)
-    print 'n_observations', len(wdb._observations)
+        prob_spec = pgen.next()
+        print prob_spec
+        wdb.build_dtree(force=False)
+        print 'n_observations', len(wdb._observations)
 
-    smart_op_spec = prob_spec.plan(patience=-1,
-            wisdom=wdb,
-            verbose=1)
-    ref_op_spec = wisdom.reference_op_spec()
+        smart_op_spec = prob_spec.plan(patience=-1,
+                wisdom=wdb,
+                verbose=1)
+        ref_op_spec = wisdom.reference_op_spec()
 
-    smart_speed = prob_spec.measure_speed(smart_op_spec,
-            n_warmups=2, n_runs=5,
-            wisdom=wdb)
-
-    if smart_op_spec != ref_op_spec:
-        ref_speed = prob_spec.measure_speed(ref_op_spec,
+        smart_speed = prob_spec.measure_speed(smart_op_spec,
                 n_warmups=2, n_runs=5,
-                wisdom=wdb if ref_op_spec != smart_op_spec else None)
-        finding = dict(
-                smart=smart_speed,
-                ref=ref_speed)
-        results.append(finding)
-        best_op_spec = smart_op_spec if smart_speed > ref_speed else ref_op_spec
-    else:
-        results.append(dict(smart=smart_speed, ref=smart_speed))
-        best_op_spec = smart_op_spec
+                wisdom=wdb)
 
-    print 'FINDING', results[-1]
-    # -- some exploration
-    N = float(N)
-    while N > 0:
-        random_op_spec = wisdom.random_op_cross(best_op_spec,
-                wisdom.random_op_spec(rng),
-                rng, .75)
+        if smart_op_spec != ref_op_spec:
+            ref_speed = prob_spec.measure_speed(ref_op_spec,
+                    n_warmups=2, n_runs=5,
+                    wisdom=wdb if ref_op_spec != smart_op_spec else None)
+            finding = dict(
+                    smart=smart_speed,
+                    ref=ref_speed)
+            results.append(finding)
+            best_op_spec = smart_op_spec if smart_speed > ref_speed else ref_op_spec
+        else:
+            results.append(dict(smart=smart_speed, ref=smart_speed))
+            best_op_spec = smart_op_spec
 
-        if random_op_spec == best_op_spec:
-            N -= .2
-            continue
-        random_speed = prob_spec.measure_speed(random_op_spec,
-            n_warmups=2, n_runs=5,
-            wisdom=wdb,
-            abort_thresh=smart_speed * .75, # should be best speed
-            save_on_abort=False)
-        print random_speed
-        N -= 1
+        print 'FINDING', results[-1]
+        # -- some exploration
+        N = float(N)
+        while N > 0:
+            random_op_spec = wisdom.random_op_cross(best_op_spec,
+                    wisdom.random_op_spec(rng),
+                    rng, .75)
 
-    ofile = open(wisdomfile, 'w')
-    cPickle.dump((wdb, results, rng), ofile)
-    ofile.close()
+            if random_op_spec == best_op_spec:
+                N -= .2
+                continue
+            random_speed = prob_spec.measure_speed(random_op_spec,
+                n_warmups=2, n_runs=5,
+                wisdom=wdb,
+                abort_thresh=smart_speed * .75, # should be best speed
+                save_on_abort=False)
+            print random_speed
+            N -= 1
+    finally:
+        ofile = open(wisdomfile, 'w')
+        cPickle.dump((wdb, results, rng), ofile)
+        ofile.close()
 
 
 def main_insert_random_stuff():
