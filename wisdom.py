@@ -7,7 +7,7 @@ from hyperopt.ht_dist2 import one_of, rSON2
 import pycuda.driver
 
 logger = logging.getLogger(__name__)
-logger.setLevel(logging.WARN)
+logger.setLevel(logging.INFO)
 RSEED = 123
 
 class OpSpec(object):
@@ -28,23 +28,23 @@ class OpSpec(object):
 
     def __eq__(self, other):
         return (type(self) == type(other)
-                and (self.features() == other.features()))
+                and (self.feature_pairs() == other.feature_pairs()))
 
     def __ne__(self, other):
         return not self == other
 
     def __hash__(self):
-        return hash((type(self),) + tuple(self.features()))
+        return hash((type(self),) + tuple(self.feature_pairs()))
 
     def __repr__(self):
-        assigns = ['%s=%s' % (n, v) for v, n in self.features()]
+        assigns = ['%s=%s' % (n, v) for v, n in self.feature_pairs()]
         return "OpSpec(%s)" % ", ".join(assigns)
 
     def FilterOp(self, imgs, filters, outs):
         return fbconv3_cuda.FilterOp(imgs, filters, outs,
                 **self.__dict__)
 
-    def features(self):
+    def feature_pairs(self):
         return [(self.block_w, 'block_w'),
                 (self.block_h, 'block_h'),
                 (self.n_filter_rows, 'n_filter_rows'),
@@ -59,6 +59,11 @@ class OpSpec(object):
                     'maxreg'),
                 (self.use_fast_math, 'fast_math'),
                 ]
+    def feature_names(self):
+        return zip(*self.feature_pairs())[1]
+
+    def feature_values(self):
+        return map(float, zip(*self.feature_pairs())[0])
 
 def random_op_spec(rng):
     dct = rSON2(
@@ -143,7 +148,7 @@ class ProblemSpec(object):
                 / (1000.**3.)) #return as giga float ops
 
     # relevant hand-designed features of problem specification
-    def features(self):
+    def feature_pairs(self):
         # all imgs c contiguous
         # each img c contiguous
         # all imgs f contiguous
@@ -173,8 +178,15 @@ class ProblemSpec(object):
             ]
         return [(getattr(self, name), name) for name in names]
 
+    def feature_names(self):
+        return zip(*self.feature_pairs())[1]
+
+    def feature_values(self):
+        return map(float, zip(*self.feature_pairs())[0])
+
+
     def __repr__(self):
-        assigns = ['%s=%s' % (n, v) for v, n in self.features()]
+        assigns = ['%s=%s' % (n, v) for v, n in self.feature_pairs()]
         return "ProblemSpec(%s)" % ", ".join(assigns)
 
     def autotune_random(self, timeout=float('inf'), max_trials=100, n_warmups=2, n_runs=5):
@@ -220,7 +232,7 @@ class ProblemSpec(object):
                 wisdom=wisdom)
         for candidate in candidates[1:]:
             if (time.time() - t_start) >= patience:
-                logger.info( "Breaking at position %i" % (
+                logger.debug( "Breaking at position %i" % (
                             candidates.index(candidate)))
                 return encumbent
             candidate_speed = clock_candidate()
@@ -381,11 +393,14 @@ class Wisdom(object):
         if node['kind'] == 'fork':
             if node['feature'] < len(feature):
                 if feature[node['feature']] < node['value']:
+                    print '-- branch ', node['feature_name'], '<', node['value']
                     child = node['left']
                 else:
+                    print '-- branch ', node['feature_name'], '>=', node['value']
                     child = node['right']
                 return self._suggest_helper(feature, child)
             else:
+                print '-- ignoring', node['feature_name'], '<', node['value']
                 lval = self._suggest_helper(feature, node['left'])
                 rval = self._suggest_helper(feature, node['right'])
                 return lval + rval
@@ -406,7 +421,9 @@ class Wisdom(object):
         # 3. sort all matching pairs by decreasing speed
         #    and return the ops of that list
 
-        scores_idxs = self._suggest_helper(prob_spec.features(), self._dtree)
+        scores_idxs = self._suggest_helper(
+                np.asarray(prob_spec.feature_values()),
+                self._dtree)
         rval_specs = set()
         rvals = []
         for score, idxs in scores_idxs:
@@ -424,6 +441,9 @@ class Wisdom(object):
         else:
             rvals.sort()
             rvals.reverse()
+            print 'compatible', len(scores_idxs)
+            for r in rvals[:5]:
+                print 'RANKED SUG', r
             return [r[1] for r in rvals]
 
     def record(self, prob_spec, op_spec, speed):
@@ -443,7 +463,7 @@ class Wisdom(object):
             min_split_size=3):
         targets_var = np.var(targets)
         total_sse = (len(targets) * targets_var)
-        logger.info('total squared error = %f' % total_sse)
+        logger.debug('total squared error = %f' % total_sse)
         if total_sse < min_improvement:
             return dict(
                     kind='leaf',
@@ -469,9 +489,9 @@ class Wisdom(object):
                     new_total_sse = (len(below) * np.var(below)
                             + len(above) * np.var(above))
                     if new_total_sse < best_sse:
-                        split_pt = (0.5 * features[order_i[j - 1], i]
-                                + 0.5 * features[order_i[j], i])
-                        logger.info('new best sse %f  (%i, %i) (%s < %s)' % (
+                        split_pt = (0.5 * features_i[order_i[j - 1]]
+                                + 0.5 * features_i[order_i[j]])
+                        logger.debug('new best sse %f  (%i, %i) (%s < %s)' % (
                             new_total_sse,
                             i, j,
                             feature_names[i], split_pt))
@@ -481,8 +501,8 @@ class Wisdom(object):
         if best_sse < total_sse - min_improvement:
             ii, jj, split_pt = best_ij
             one_to_n = np.arange(len(features))
-            leftidxs = one_to_n[features[:,ii] < split_pt]
-            rightidxs = one_to_n[features[:,ii] >= split_pt]
+            leftidxs = one_to_n[features[:, ii] < split_pt]
+            rightidxs = one_to_n[features[:, ii] >= split_pt]
             assert len(leftidxs) + len(rightidxs) == len(features)
             assert len(leftidxs) >= min_split_size
             assert len(rightidxs) >= min_split_size
@@ -522,14 +542,14 @@ class Wisdom(object):
                 len(self._observations))
         for prob_spec, op_spec, speed in self._observations:
             feature = np.concatenate([
-                        zip(*prob_spec.features())[0],
-                        zip(*op_spec.features())[0]])
+                prob_spec.feature_values(),
+                op_spec.feature_values()])
             target = np.log(speed + 1e-10)
             features.append(feature)
             targets.append(target)
 
         # just use last prob_spec
-        feature_names = zip(*prob_spec.features())[1] + zip(*op_spec.features())[1]
+        feature_names = prob_spec.feature_names() + op_spec.feature_names()
         features = np.asarray(features, order='F')
         targets = np.asarray(targets)
 

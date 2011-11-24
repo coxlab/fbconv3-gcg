@@ -156,7 +156,7 @@ def main_fig1():
     _python, _cmd, wisdomfile = sys.argv
     wdb, results, rng = cPickle.load(open(wisdomfile))
     import matplotlib.pyplot as plt
-    y = [r['smart'] / r['ref'] for r in results]
+    y = [r['smart'] / r['ref'] for r in results if r['ref'] > 0]
     plt.scatter(numpy.arange(len(y)), y)
     plt.xlabel('amount of training data')
     plt.ylabel('speed of dtree / speed of reference')
