@@ -1,9 +1,13 @@
+import logging
 import time
 import fbconv3_cuda
+import numpy as np
 import scipy as sp
 from hyperopt.ht_dist2 import one_of, rSON2
-import pycuda._driver
+import pycuda.driver
 
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.WARN)
 RSEED = 123
 
 class OpSpec(object):
@@ -22,14 +26,34 @@ class OpSpec(object):
         self.__dict__.update(locals())
         del self.self
 
+    def __repr__(self):
+        assigns = ['%s=%s' % (n, v) for v, n in self.features()]
+        return "OpSpec(%s)" % ", ".join(assigns)
+
     def FilterOp(self, imgs, filters, outs):
         return fbconv3_cuda.FilterOp(imgs, filters, outs,
                 **self.__dict__)
 
+    def features(self):
+        return [(self.block_w, 'block_w'),
+                (self.block_h, 'block_h'),
+                (self.n_filter_rows, 'n_filter_rows'),
+                (self.n_output4s=="all", 'output4s_all'),
+                (self.n_output4s==1, 'output4s_1'),
+                (self.n_output4s==2, 'output4s_2'),
+                (self.spill, 'spill'),
+                (self.pad_shared, 'pad_shared'),
+                (self.use_tex1dfetch, 'tex1dfetch'),
+                (self.maxrregcount==None, 'maxreg_none'),
+                (0 if self.maxrregcount is None else self.maxrregcount,
+                    'maxreg'),
+                (self.use_fast_math, 'fast_math'),
+                ]
+
 def random_op_spec(rng):
     dct = rSON2(
-        "block_w" , one_of(4, 8, 16, 32, 64, 128, 256, 512),
-        "block_h" , one_of(4, 8, 16, 32, 64, 128, 256, 512),
+        "block_w" , one_of(4, 8, 16, 32, 64, 128),
+        "block_h" , one_of(4, 8, 16, 32, 64, 128),
         "n_filter_rows" , one_of(1, 2),
         "n_output4s" , one_of("all", 1, 2),
         "spill" , one_of(False, True),
@@ -94,30 +118,41 @@ class ProblemSpec(object):
                 / (1000.**3.)) #return as giga float ops
 
     # relevant hand-designed features of problem specification
-    def features():
-        """
-        all imgs c contiguous
-        each img c contiguous
-        all imgs f contiguous
-        each img f contiguous
-        all imgs size
-        each img size
-        img channel major
-        img channel minor
-        all filters c contiguous
-        each filter c contiguous
-        all filters f contiguous
-        each filter f contiguous
-        all filters size
-        each filter size
-        filter channel major
-        filter channel minor
-        filters flipped vertically (conv vs. corr)
-        filters flipped horizontally (conv vs. corr)
-        """
-        raise NotImplementedError()
+    def features(self):
+        # all imgs c contiguous
+        # each img c contiguous
+        # all imgs f contiguous
+        # each img f contiguous
+        # all imgs size
+        # each img size
+        # img channel major
+        # img channel minor
+        # all filters c contiguous
+        # each filter c contiguous
+        # all filters f contiguous
+        # each filter f contiguous
+        # all filters size
+        # each filter size
+        # filter channel major
+        # filter channel minor
+        # filters flipped vertically (conv vs. corr)
+        # filters flipped horizontally (conv vs. corr)
+        names = [
+            'n_imgs',
+            'height',
+            'width',
+            'depth',
+            'n_filters',
+            'filter_height',
+            'filter_width',
+            ]
+        return [(getattr(self, name), name) for name in names]
 
-    def autotune_random(self, timeout=float('inf'), max_trials=100, n_warmups=2, n_runs=4):
+    def __repr__(self):
+        assigns = ['%s=%s' % (n, v) for v, n in self.features()]
+        return "ProblemSpec(%s)" % ", ".join(assigns)
+
+    def autotune_random(self, timeout=float('inf'), max_trials=100, n_warmups=2, n_runs=5):
         """
         Run a random search on FBConv3 bandit to find the best settings for
         this problem spec, return optimal FilterOp.
@@ -142,46 +177,38 @@ class ProblemSpec(object):
         if wisdom is None:
             wisdom = Wisdom()
 
-        candidates = wisdom.ranked_suggestions(self)
+        candidates = wisdom.ranked_suggestions(self)[:3]
         encumbent = candidates[0]
         if (time.time() - t_start) >= patience:
             return encumbent
 
         def clock_candidate():
-            try:
-                return self.measure_speed(candidate,
-                        n_warmups=2,
-                        n_runs=3,
-                        abort_thresh=encumbent_speed * 0.75)
-            except fbconv3_cuda.InvalidConfig:
-                return 0
-            except pycuda._driver.LogicError:
-                #XXX: cuModuleGetTexRef not found
-                return 0
+            return self.measure_speed(candidate,
+                    n_warmups=2,
+                    n_runs=5,
+                    abort_thresh=encumbent_speed * 0.75,
+                    wisdom=wisdom)
+        logger.debug("Cycling through %i candidates from wisdom db" % (
+                len(candidates)))
 
-        if verbose > 0:
-            print "Cycling through %i candidates from wisdom db" % (
-                    len(candidates))
-
-        encumbent_speed = self.measure_speed(encumbent, n_warmups=2, n_runs=3)
+        encumbent_speed = self.measure_speed(encumbent, n_warmups=2, n_runs=5,
+                wisdom=wisdom)
         for candidate in candidates[1:]:
             if (time.time() - t_start) >= patience:
-                if verbose > 0:
-                    print "Breaking at position %i" % (
-                            candidates.index(candidate))
+                logger.info( "Breaking at position %i" % (
+                            candidates.index(candidate)))
                 return encumbent
             candidate_speed = clock_candidate()
             if candidate_speed > encumbent_speed:
                 encumbent = candidate
                 encumbent_speed = candidate_speed
 
+        # XXX: why does rng = np.random not resample things??
+        rng = np.random.RandomState(int(time.time() * 1000))
         while (time.time() - t_start) < patience:
-            candidate = random_op_spec(sp.random)
+            candidate = random_op_spec(rng)
             candidate_speed = clock_candidate()
             if candidate_speed > 0:
-                if verbose > 0:
-                    print "Recording new candidate", candidate
-                wisdom.record(self, candidate, candidate_speed)
                 if candidate_speed > encumbent_speed:
                     encumbent = candidate
                     encumbent_speed = candidate_speed
@@ -189,7 +216,8 @@ class ProblemSpec(object):
         return encumbent
 
 
-    def measure_speed(self, op_spec, n_warmups, n_runs, abort_thresh=None):
+    def measure_speed(self, op_spec, n_warmups, n_runs, abort_thresh=None,
+            wisdom=None):
         """Return GFLOPS/S of op, not counting transfer times.
 
         abort_thresh - return 0 if the true value appears to be
@@ -223,7 +251,16 @@ class ProblemSpec(object):
 
         # -- set-up operation (i.e. compilation)
         fb_[:] = 0
-        fop = op_spec.FilterOp(in_, fb_, out_)
+        try:
+            fop = op_spec.FilterOp(in_, fb_, out_)
+        except fbconv3_cuda.InvalidConfig:
+            return 0
+        except pycuda._driver.LogicError:
+            #XXX: cuModuleGetTexRef not found
+            return 0
+        except pycuda.driver.CompileError:
+            #XXX: using too much shared memory
+            return 0
 
         for i in xrange(n_warmups + n_runs):
 
@@ -239,11 +276,16 @@ class ProblemSpec(object):
             # -- process convolution
             # Note Bene: Filter != Conv
             start = time.time()
-            t_cuda = fop()
+            try:
+                t_cuda = fop()
+            except fbconv3_cuda.InvalidConfig:
+                return 0
             end = time.time()
             t_process = end - start
 
             if i > 0 and (gflop / t_cuda < abort_thresh):
+                if wisdom:
+                    wisdom.record(self, op_spec, gflop / t_cuda)
                 return 0
 
             start = time.time()
@@ -283,7 +325,11 @@ class ProblemSpec(object):
             'min': gflop / timings_stats['cuda']['max'],
             }
 
-        return gflops_cuda['min']
+        # print "GFLOPS_CUDA", gflops_cuda
+
+        if wisdom:
+            wisdom.record(self, op_spec, gflops_cuda['max'])
+        return gflops_cuda['max']
 
     def assert_correct(self, op):
         """raise assertion error if op() produces incorrect output
@@ -299,10 +345,27 @@ class Wisdom(object):
 
     def __init__(self):
         self._observations = []
+        self._dtree_n_obs = 0
         self._dtree = None
 
+    def _suggest_helper(self, feature, node):
+        if node['kind'] == 'fork':
+            if node['feature'] < len(feature):
+                if feature[node['feature']] < node['value']:
+                    child = node['left']
+                else:
+                    child = node['right']
+                return self._suggest_helper(feature, child)
+            else:
+                lval = self._suggest_helper(feature, node['left'])
+                rval = self._suggest_helper(feature, node['right'])
+                return lval + rval
+        else:
+            return [(node['mean'], node['idxs'])]
+
+
     def ranked_suggestions(self, prob_spec):
-        if not self._dtree:
+        if self._dtree is None:
             return [reference_op_spec()]
 
         # 1. loop over all leaf nodes of self._dtree
@@ -310,28 +373,147 @@ class Wisdom(object):
         #    add the best (speed, op) from the leaf set
         # 3. sort all matching pairs by decreasing speed
         #    and return the ops of that list
-        raise NotImplementedError()
+
+        scores_idxs = self._suggest_helper(prob_spec.features(), self._dtree)
+        scores_idxs.sort()
+        scores_idxs.reverse()
+        #print 'SUGGESTIONS'
+        #print scores_idxs[0][0], self._observations[scores_idxs[0][1][0]]
+        #print scores_idxs[1][0], self._observations[scores_idxs[1][1][0]]
+        #print scores_idxs[2][0], self._observations[scores_idxs[2][1][0]]
+        return [self._observations[idxs[0]][1]
+                for score, idxs in scores_idxs]
 
     def record(self, prob_spec, op_spec, speed):
+        for pspec, ospec, s in self._observations:
+            if (pspec == prob_spec and ospec == op_spec):
+                if abs(s-speed) > .1:
+                    raise Exception('duplicate entry w different speed')
+                else:
+                    logger.warn('ignoring duplicate entry: %s, %s' % (
+                        prob_spec, op_spec))
+                    return
         self._observations.append((prob_spec, op_spec, speed))
 
-    def build_dtree(self):
-        raise NotImplementedError()
+    def build_dtree_rec(self, features, targets, global_idxs, feature_names,
+            min_improvement=.1,
+            min_split_size=3):
+        targets_var = np.var(targets)
+        total_sse = (len(targets) * targets_var)
+        logger.info('total squared error = %f' % total_sse)
+        if total_sse < min_improvement:
+            return dict(
+                    kind='leaf',
+                    mean=np.mean(targets),
+                    var=targets_var,
+                    idxs=global_idxs)
 
-        """
-         - distribution (empirical or analytic) of problem space
-             (e.g. filter sizes, nfilt, etc.)
-         - distribution (empirical or analytic) of configuration space
-             (e.g. blocking, threading, spilling, unrolling, texturemem, regcount)
+        best_sse = float('inf')
 
+        for i in xrange(features.shape[1]):
+            features_i = features[:,i]
+            order_i = np.argsort(features_i)
 
-        1. sample some number N of problems X_1 ... X_N
-        2. autotune for each problem X_i. Draw (or optimize) M configurations
-            a_{m,n} and time them, measuring GLOPS y_{m,n}.
+            sorted_target = targets[order_i]
 
-        Thus we produce a dataset of the form
-        (X_1, (X_1, a_1, y_1), X_1
+            # XXX : do this in linear time instead of quadratic!
+            # XXX: check for off by 1
+            for j in xrange(min_split_size,
+                    len(features) - 1 - min_split_size):
+                if features_i[order_i[j - 1]] != features_i[order_i[j]]:
+                    below = sorted_target[:j]
+                    above = sorted_target[j:]
+                    new_total_sse = (len(below) * np.var(below)
+                            + len(above) * np.var(above))
+                    if new_total_sse < best_sse:
+                        split_pt = (0.5 * features[order_i[j - 1], i]
+                                + 0.5 * features[order_i[j], i])
+                        logger.info('new best sse %f  (%i, %i) (%s < %s)' % (
+                            new_total_sse,
+                            i, j,
+                            feature_names[i], split_pt))
+                        best_ij = (i, j, split_pt)
+                        best_sse = new_total_sse
 
-        """
+        if best_sse < total_sse - min_improvement:
+            ii, jj, split_pt = best_ij
+            one_to_n = np.arange(len(features))
+            leftidxs = one_to_n[features[:,ii] < split_pt]
+            rightidxs = one_to_n[features[:,ii] >= split_pt]
+            assert len(leftidxs) + len(rightidxs) == len(features)
+            assert len(leftidxs) >= min_split_size
+            assert len(rightidxs) >= min_split_size
+            return dict(
+                    kind='fork',
+                    feature=ii,
+                    feature_name=feature_names[ii],
+                    value=split_pt,
+                    left=self.build_dtree_rec(
+                        features[leftidxs],
+                        targets[leftidxs],
+                        global_idxs[leftidxs],
+                        feature_names,
+                        ),
+                    right=self.build_dtree_rec(
+                        features[rightidxs],
+                        targets[rightidxs],
+                        global_idxs[rightidxs],
+                        feature_names,
+                        ),
+                    )
+        else:
+            return dict(
+                    kind='leaf',
+                    mean=np.mean(targets),
+                    var=targets_var,
+                    idxs=global_idxs)
 
+    def build_dtree(self, force=True):
+        if not force:
+            if (len(self._observations) < 10 or
+                    len(self._observations) < 1.25 * self._dtree_n_obs):
+                return
+        features = []
+        targets = []
+        logger.info('building dtree from %i observations' %
+                len(self._observations))
+        for prob_spec, op_spec, speed in self._observations:
+            feature = np.concatenate([
+                        zip(*prob_spec.features())[0],
+                        zip(*op_spec.features())[0]])
+            target = np.log(speed + 1e-10)
+            features.append(feature)
+            targets.append(target)
+
+        # just use last prob_spec
+        feature_names = zip(*prob_spec.features())[1] + zip(*op_spec.features())[1]
+        features = np.asarray(features, order='F')
+        targets = np.asarray(targets)
+
+        self._dtree = self.build_dtree_rec(features, targets,
+                global_idxs=np.arange(len(features)),
+                feature_names=feature_names)
+        self._dtree_n_obs = len(features)
+
+        if 0:
+            for i, o in enumerate(self._observations):
+                print 'OBS', i, o[0]
+                print 'OBS', i, o[1]
+                print 'OBS', i, o[2]
+
+        self.print_dtree(self._dtree)
+
+    def print_dtree(self, node, prefix=""):
+        if node == self._dtree:
+            print 'DTREE (n_obs = %i)' % len(self._observations)
+        if node['kind'] == 'fork':
+            print prefix,
+            print node['feature_name'], '<', node['value']
+            self.print_dtree(node['left'], prefix + "  ")
+            self.print_dtree(node['right'], prefix + "  ")
+        else:
+            print prefix,
+            print 'avg of ', len(node['idxs']),
+            print ': ', node['mean'],
+            print '+-', np.sqrt(node['var'])
 

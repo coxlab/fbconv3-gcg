@@ -3,10 +3,15 @@ For a given patience in obtaining each plan,
 how many gigaflops can you get on average from a particular problem space?
 """
 
+import logging
+logger = logging.getLogger(__name__)
+logging.basicConfig(level=logging.INFO)
+
 import sys
 import cPickle
 
 import numpy
+import pycuda._driver
 
 import wisdom
 from hyperopt.ht_dist2 import one_of, rSON2
@@ -45,37 +50,88 @@ def problem_generator():
             continue
         yield prob_spec
 
-try:
-    wdb = cPickle.load(open(sys.argv[1]))
-except (IOError, EOFError):
-    wdb = wisdom.Wisdom()
+def main_step():
+    _python, _cmd, wisdomfile, N = sys.argv
 
-patience = 10  # seconds
-for i, prob_spec in zip(range(5), problem_generator()):
-    print prob_spec
-    smart_op_spec = prob_spec.plan(patience=patience,
-            wisdom=wdb,
-            verbose=1)
-    smart_speed = prob_spec.measure_speed(smart_op_spec,
-            n_warmups=2, n_runs=3)
+    try:
+        wdb, results = cPickle.load(open(wisdomfile))
+    except (IOError, EOFError):
+        wdb, results = wisdom.Wisdom(), []
 
-    ref_op_spec = wisdom.reference_op_spec()
-    ref_speed = prob_spec.measure_speed(ref_op_spec,
-            n_warmups=2, n_runs=3)
+    patience = 20  # seconds
+    for i, prob_spec in zip(range(int(N)), problem_generator()):
+        wdb.build_dtree(force=False)
+        print prob_spec
+        smart_op_spec = prob_spec.plan(patience=patience,
+                wisdom=wdb,
+                verbose=1)
+        smart_speed = prob_spec.measure_speed(smart_op_spec,
+                n_warmups=2, n_runs=3)
 
-    # XXX: also consider taking max over N random op_specs as stiffer
-    #      competition
-    for ii in xrange(50):
-        try:
-            random_op_spec = wisdom.random_op_spec(numpy.random)
-            random_speed = prob_spec.measure_speed(random_op_spec,
-                    n_warmups=2, n_runs=3)
-            break
-        except fbconv3_cuda.InvalidConfig:
-            random_speed = 0
-            continue
-    print 'SMART:', smart_speed, 'REFERENCE', ref_speed, 'RANDOM:', random_speed
+        ref_op_spec = wisdom.reference_op_spec()
+        ref_speed = prob_spec.measure_speed(ref_op_spec,
+                n_warmups=2, n_runs=3)
 
-cPickle.dump(wdb, open(sys.argv[1], 'w'))
+        # XXX: also consider taking max over N random op_specs as stiffer
+        #      competition
+        for ii in xrange(50):
+            try:
+                random_op_spec = wisdom.random_op_spec(numpy.random)
+                random_speed = prob_spec.measure_speed(random_op_spec,
+                        n_warmups=2, n_runs=3)
+                break
+            except fbconv3_cuda.InvalidConfig:
+                random_speed = 0
+                continue
+        finding = dict(
+                smart=smart_speed,
+                ref=ref_speed,
+                random=random_speed)
+        print 'FINDING', finding
+        results.append(finding)
+        ofile = open(wisdomfile, 'w')
+        cPickle.dump((wdb, results), ofile)
+        ofile.close()
 
+def main_insert_random_stuff():
+    _python, _cmd, wisdomfile, N = sys.argv
 
+    try:
+        wdb = cPickle.load(open(wisdomfile))
+    except (IOError, EOFError):
+        wdb = wisdom.Wisdom()
+
+    patience = 20  # seconds
+    for i, prob_spec in zip(range(int(N)), problem_generator()):
+        for ii in xrange(50):
+            try:
+                random_op_spec = wisdom.random_op_spec(numpy.random)
+                random_speed = prob_spec.measure_speed(random_op_spec,
+                        n_warmups=2, n_runs=3)
+                break
+            except fbconv3_cuda.InvalidConfig:
+                random_speed = 0
+                continue
+            except pycuda._driver.LogicError:
+                #XXX: cuModuleGetTexRef not found
+                random_speed = 0
+                continue
+            except pycuda._driver.CompileError:
+                #XXX: cuModuleGetTexRef not found
+                random_speed = 0
+                continue
+        print 'RANDOM:', random_speed
+        wdb.record(prob_spec, random_op_spec, random_speed)
+
+    cPickle.dump(wdb, open(wisdomfile, 'w'))
+
+def main_dtree():
+    _python, _cmd, wisdomfile = sys.argv
+    wdb = cPickle.load(open(wisdomfile))
+    wdb.build_dtree()
+    cPickle.dump(wdb, open(wisdomfile, 'w'))
+
+if __name__ == '__main__':
+    cmd = sys.argv[1]
+    main = globals()['main_' + cmd]
+    sys.exit(main())
