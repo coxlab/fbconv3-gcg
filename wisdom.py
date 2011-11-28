@@ -40,9 +40,9 @@ class OpSpec(object):
         assigns = ['%s=%s' % (n, v) for v, n in self.feature_pairs()]
         return "OpSpec(%s)" % ", ".join(assigns)
 
-    def FilterOp(self, imgs, filters, outs):
+    def FilterOp(self, imgs, filters, outs, ctxt):
         return fbconv3_cuda.FilterOp(imgs, filters, outs,
-                **self.__dict__)
+                ctxt=ctxt, **self.__dict__)
 
     def feature_pairs(self):
         return [(self.block_w, 'block_w'),
@@ -52,6 +52,7 @@ class OpSpec(object):
                 (self.n_output4s==1, 'output4s_1'),
                 (self.n_output4s==2, 'output4s_2'),
                 (self.spill, 'spill'),
+                (self.imul_fast, 'imul_fast'),
                 (self.pad_shared, 'pad_shared'),
                 (self.use_tex1dfetch, 'tex1dfetch'),
                 (self.maxrregcount==None, 'maxreg_none'),
@@ -189,18 +190,8 @@ class ProblemSpec(object):
         assigns = ['%s=%s' % (n, v) for v, n in self.feature_pairs()]
         return "ProblemSpec(%s)" % ", ".join(assigns)
 
-    def autotune_random(self, timeout=float('inf'), max_trials=100, n_warmups=2, n_runs=5):
-        """
-        Run a random search on FBConv3 bandit to find the best settings for
-        this problem spec, return optimal FilterOp.
-        """
-        # basically call fbconv3_benchmark.benchmark_run with self as
-        # argument.
-        t_start = time.time()
-
-        raise NotImplementedError()
-
-    def plan(self, patience=0.1, wisdom=None, approx_n_uses=1000, verbose=0):
+    def plan(self, patience=0.0, wisdom=None, approx_n_uses=1000, ctxt=None,
+            rng=None):
         """
         problem_spec - ProblemSpec instance
         patience - return a plan within this many seconds.
@@ -214,23 +205,27 @@ class ProblemSpec(object):
         if wisdom is None:
             wisdom = Wisdom()
 
-        candidates = wisdom.ranked_suggestions(self)
-        encumbent = candidates[0]
+        encumbent = reference_op_spec()
         if (time.time() - t_start) >= patience:
             return encumbent
+
+        encumbent_speed = self.measure_speed(encumbent, n_warmups=2, n_runs=8,
+                wisdom=wisdom, ctxt=ctxt)
 
         def clock_candidate():
             return self.measure_speed(candidate,
                     n_warmups=2,
-                    n_runs=5,
+                    n_runs=8,
                     abort_thresh=encumbent_speed * 0.75,
-                    wisdom=wisdom)
-        logger.debug("Cycling through %i candidates from wisdom db" % (
-                len(candidates)))
+                    # causes annoying crashes, but I think there's a memory leak w pycuda
+                    save_on_abort=True,
+                    wisdom=wisdom,
+                    ctxt=ctxt)
 
-        encumbent_speed = self.measure_speed(encumbent, n_warmups=2, n_runs=5,
-                wisdom=wisdom)
-        for candidate in candidates[1:]:
+        candidates = wisdom.ranked_suggestions(self)
+        for candidate in candidates[:2]:
+            if candidate == encumbent:
+                continue
             if (time.time() - t_start) >= patience:
                 logger.debug( "Breaking at position %i" % (
                             candidates.index(candidate)))
@@ -241,24 +236,26 @@ class ProblemSpec(object):
                 encumbent_speed = candidate_speed
 
         # XXX: why does rng = np.random not resample things??
-        rng = np.random.RandomState(int(time.time() * 1000))
+        if rng is None:
+            rng = np.random.RandomState(int(time.time() * 1000))
         # XXX: instead of drawing randomly
         #      - draw randomly and filter using the dtree
         #      - randomly perturb and hillclimb from the encumbent
         #      - run some other kind of optimization strategy here
         while (time.time() - t_start) < patience:
-            candidate = random_op_spec(rng)
+            # XXX: local search should be parametrized somehow
+            candidate = random_op_cross(encumbent,
+                    random_op_spec(rng),
+                    rng, .75)
             candidate_speed = clock_candidate()
             if candidate_speed > 0:
                 if candidate_speed > encumbent_speed:
                     encumbent = candidate
                     encumbent_speed = candidate_speed
-
         return encumbent
 
-
     def measure_speed(self, op_spec, n_warmups, n_runs, abort_thresh=None,
-            wisdom=None, save_on_abort=True):
+            wisdom=None, save_on_abort=True, ctxt=None):
         """Return GFLOPS/S of op, not counting transfer times.
 
         abort_thresh - return 0 if the true value appears to be
@@ -286,14 +283,19 @@ class ProblemSpec(object):
                                     )])
 
         # XXX one image at a time
+        print "USED TOTAL", pycuda.driver.mem_get_info()
         in_ = fbconv3_cuda.Input(*img_shp)
+        print "USED TOTAL", pycuda.driver.mem_get_info()
         fb_ = fbconv3_cuda.Filterbank(*ker_shp)
+        print "USED TOTAL", pycuda.driver.mem_get_info()
         out_ = fbconv3_cuda.Output(*out_shp)
+        print "USED TOTAL", pycuda.driver.mem_get_info()
 
         # -- set-up operation (i.e. compilation)
         fb_[:] = 0
         try:
-            fop = op_spec.FilterOp(in_, fb_, out_)
+            # this is wrapper - op_spec inserts the various args
+            fop = op_spec.FilterOp(in_, fb_, out_, ctxt=ctxt)
         except (fbconv3_cuda.InvalidConfig,
                 pycuda._driver.LogicError,    #XXX: cuModuleGetTexRef not found
                 pycuda.driver.CompileError,): #XXX: using too much shared memory
@@ -302,6 +304,7 @@ class ProblemSpec(object):
             return 0
 
         for i in xrange(n_warmups + n_runs):
+            print "USED TOTAL", pycuda.driver.mem_get_info()
 
             # -- upload data
             start = time.time()
@@ -448,15 +451,12 @@ class Wisdom(object):
             return [r[1] for r in rvals]
 
     def record(self, prob_spec, op_spec, speed):
-        for pspec, ospec, s in self._observations:
+        print 'RECORD', prob_spec, op_spec, speed
+        for i, (pspec, ospec, s) in enumerate(self._observations):
             if (pspec == prob_spec and ospec == op_spec):
-                if abs(np.log(s) - np.log(speed)) > np.log(1.2):
-                    raise Exception('duplicate entry w different speed',
-                            (s, speed))
-                else:
-                    logger.warn('ignoring duplicate entry: %s, %s' % (
-                        prob_spec, op_spec))
-                    return
+                # XXX HACKY RUNNING AVERAGE
+                self._observations[i] = (pspec, ospec, .5 * s + .5 * speed)
+                return
         self._observations.append((prob_spec, op_spec, speed))
 
     def build_dtree_rec(self, features, targets, global_idxs, feature_names,
@@ -473,6 +473,10 @@ class Wisdom(object):
                     mean=np.mean(targets),
                     var=targets_var,
                     idxs=global_idxs)
+
+        #
+        # XXX: Deal with overfitting in tree-fitting
+        #
 
         best_sse = float('inf')
 

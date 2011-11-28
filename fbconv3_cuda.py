@@ -10,24 +10,7 @@ import logging
 log = logging.getLogger(__name__)
 log.setLevel(logging.WARN)
 
-# Initialize CUDA
 from pycuda import driver, gpuarray, compiler, tools
-from pycuda.driver import device_attribute
-driver.init()
-context = tools.make_default_context()
-device = context.get_device()
-import atexit
-atexit.register(context.pop)
-
-
-def get_device_attribute(name):
-    return device.get_attribute(device_attribute.__dict__[name])
-device_name = device.name().replace(' ', '_')
-
-print "=" * 80
-print "Using:", device_name
-print "=" * 80
-
 #import os
 from os import path
 
@@ -60,10 +43,19 @@ class FilterOp(object):
                  maxrregcount=None,  # None, 8, 16, 32
                  # --
                  use_fast_math=False,
+                 ctxt=None
                  ):
+
+        assert ctxt is not None
 
         # block of threads
         block = block_w, block_h, 1
+
+        def get_device_attribute(name):
+            from pycuda.driver import device_attribute
+            device = ctxt.get_device()
+            return device.get_attribute(device_attribute.__dict__[name])
+
 
         max_block_w = get_device_attribute("MAX_BLOCK_DIM_X")
         if block_w > max_block_w:
@@ -345,7 +337,7 @@ class Input(object):
             else:
                 ngarrs = int(np.ceil(depth / 4.))
                 self._garr_l = [gpuarray.GPUArray((padh,padw,4),'float32') for _ in xrange(ngarrs)]
-        except driver.MemoryError, err:
+        except (driver.MemoryError, driver.LaunchError), err:
             raise InvalidConfig(err)
 
         self._garr_tmp = driver.pagelocked_empty(self._garr_l[0].shape, self.dtype)
