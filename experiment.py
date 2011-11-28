@@ -176,6 +176,7 @@ def main_fig1():
 
 
 if __name__ == '__main__':
+    print "CALL LIKE THIS: python experiment.py step foo_debug.pkl 15"
     #ctxt = init_cuda()
     import pycuda.autoinit
     ctxt = pycuda.autoinit.context
