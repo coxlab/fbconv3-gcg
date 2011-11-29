@@ -172,6 +172,7 @@ class FilterOp(object):
 
         # -- nvcc flags
         opt_l = os.environ.get("PYCUDA_DEFAULT_NVCC_FLAGS", "").split()
+        print opt_l
         if maxrregcount is not None:
             opt_l += ["--maxrregcount=%d" % maxrregcount]
         if use_fast_math:
